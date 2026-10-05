@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 import yaml
 from pydantic import BaseModel
 
-from .check import CheckReport, check_stem, dash_hits
+from .check import CheckReport, dash_hits, fresh_report
 from .files import atomic_write, create_new, dump_yaml
 from .generate import DATA_NOTE_JA
 from .infounits import info_units
@@ -68,11 +68,6 @@ def _item_id(kind: str, category: str, text: str) -> str:
     return f"{kind}-{hashlib.sha1(f'{kind}|{category}|{norm(text)}'.encode()).hexdigest()[:10]}"
 
 
-def _runs(detail: str) -> int | None:
-    m = re.search(r"(\d+) 回の判定", detail)
-    return int(m[1]) if m else None
-
-
 def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str]) -> list[Item]:
     out: dict[str, Item] = {}
     by_du = {d.id: d for d in info_units(src)}
@@ -86,7 +81,7 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
 
     for rep in reports:
         for c in rep.checks:
-            n = _runs(c.detail)
+            n = c.runs
             for it in c.items:
                 match c.id:
                     case "meta":
@@ -128,13 +123,7 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
 
 
 def load_reports(wd: WorkDir, draft: str) -> list[CheckReport]:
-    src = wd.root / draft
-    out = []
-    for surface in (False, True):
-        p = wd.root / f"{check_stem(draft, surface)}.json"
-        if p.exists() and p.stat().st_mtime >= src.stat().st_mtime:
-            out.append(CheckReport.model_validate_json(p.read_text(encoding="utf-8")))
-    return out
+    return [r for r in (fresh_report(wd, draft, surface) for surface in (False, True)) if r is not None]
 
 
 def review_path(wd: WorkDir, draft: str):

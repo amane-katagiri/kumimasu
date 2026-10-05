@@ -99,10 +99,6 @@ class Aside(BaseModel):
     why: str = ""
 
 
-SKIP_MAX = 3
-ASIDE_MAX = 2
-
-
 class Design(BaseModel):
     purpose: str = ""
     kind: Kind = "実用"

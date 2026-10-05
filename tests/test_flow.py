@@ -103,7 +103,7 @@ def test_decisions_parity_and_provenance(tmp_path):
     from kumimasu.check import Check, CheckReport
 
     rep = CheckReport(draft="draft.md", chars=0, checks=[Check(
-        id="meta", relation="r", passed=False, surface=True, detail="3 回の判定の多数決",
+        id="meta", relation="r", passed=False, surface=True, detail="3 回の判定の多数決", runs=3,
         items=[{"id": "M1", "category": "signpost", "text": "スマホとデジカメで IMG_1234.JPG と DSC01234.JPG のように名前がばらばらでした。", "votes": 2}])])
     (a.root / "check.json").write_text(rep.model_dump_json(), encoding="utf-8")
     b_root = tmp_path / "b"
@@ -186,10 +186,10 @@ def test_auto_review_never_rewrites_and_keeps_material_sentences(wd, monkeypatch
 
     traced = "試したら、スマホの写真 312 枚のうち 9 枚に撮影日時がありませんでした。"
     rep = CheckReport(draft="draft.md", chars=0, checks=[
-        Check(id="glue", relation="r", passed=False, surface=True, detail="3 回の判定の多数決",
+        Check(id="glue", relation="r", passed=False, surface=True, detail="3 回の判定の多数決", runs=3,
               items=[{"id": "M3", "text": traced, "votes": 2},
                      {"id": "M9", "text": "それでも並び順はだいたい保たれるので、私はこれで十分だと判断しました。", "votes": 2}]),
-        Check(id="meta", relation="r", passed=False, surface=True, detail="3 回の判定の多数決",
+        Check(id="meta", relation="r", passed=False, surface=True, detail="3 回の判定の多数決", runs=3,
               items=[{"id": "M8", "category": "signpost", "text": "更新日時は写真を保存した日時なので、撮影日とは数日ずれることがあります。", "votes": 3}])])
     (wd.root / "check.json").write_text(rep.model_dump_json(), encoding="utf-8")
     asked = []

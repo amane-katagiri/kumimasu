@@ -8,12 +8,7 @@ import yaml
 from conftest import serving
 from typer.testing import CliRunner
 
-from kumimasu.check import (
-    Check,
-    CheckReport,
-    dash_hits,
-    surface_checks,
-)
+from kumimasu.check import Check, CheckReport, Votes, dash_hits, surface_checks
 from kumimasu.cli import app
 from kumimasu.keep import KeepStore, text_hash
 from kumimasu.llm import FakeProvider
@@ -30,6 +25,7 @@ from kumimasu.review import (
 from kumimasu.textutil import apply_edits, locate
 from kumimasu.workdir import WorkDir, init_workdir
 
+VOTES = Votes(3, 2)
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = Project(topic="縦書き", audience="個人サイトを作る人", length=600)
 
@@ -73,9 +69,9 @@ def standard_report(wd: WorkDir) -> CheckReport:
 
     last = next(u for u in info_units(DRAFT) if u.text.startswith("最後の段落"))
     rep = report(
-        Check(id="meta", relation="r", passed=False, detail="3 回の判定の多数決", surface=True,
+        Check(id="meta", relation="r", passed=False, detail="3 回の判定の多数決", runs=3, surface=True,
               items=[{"id": "M1", "category": "signpost", "text": "この記事では、括弧の扱いを見ていきます。", "votes": 3}]),
-        Check(id="glue", relation="r", passed=False, detail="3 回の判定の多数決。", surface=True,
+        Check(id="glue", relation="r", passed=False, detail="3 回の判定の多数決。", runs=3, surface=True,
               items=[{"id": "M5", "text": "これにより、読みやすくなります。", "votes": 2}]),
         Check(id="lint", relation="lint", passed=False, surface=True,
               items=[{"rule": "dash", "text": "`…` と `―` は `mixed` に戻しました——理由は後述します。"}]),
@@ -143,10 +139,10 @@ def test_keep_from_another_review_marks_new_items_and_suppresses_checks(wd):
     write_report(wd, standard_report(wd), "check.v2.json")
     assert next(i for i in load_review(wd, "draft.v2.md").items if i.kind == "meta").decision == "keep"
     keep = KeepStore(wd).hashes()
-    checks = {c.id: c for c in surface_checks(DRAFT, [], None, keep=keep)}
+    checks = {c.id: c for c in surface_checks(DRAFT, [], None, VOTES, keep)}
     assert all("見ていきます" not in x["text"] for x in checks["meta"].items) and "残すと決めた文 1" in checks["meta"].detail
     flags, _ = find_flags(DRAFT, DRAFT, FakeProvider(lambda p: json.dumps({"items": [{"id": "M1", "category": "signpost"}]})),
-                          [], ("meta",), 3, 2, keep)
+                          [], ("meta",), VOTES, keep)
     assert flags == []
 
 

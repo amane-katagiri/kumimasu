@@ -21,10 +21,6 @@ SURFACE_CATEGORIES: dict[str, str] = CATEGORIES | {
           "「この構成にしておくと、あとで差し替えるときに安心です。」「つまり、Binary Eye がスキャナーの役を果たすということです。」）",
 }
 
-RUNS = 3
-MIN_VOTES = 2
-
-
 class Pick(BaseModel):
     id: str
     category: str
@@ -51,7 +47,7 @@ class SurfaceReport(BaseModel):
         return len(self.runs)
 
 
-def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int, runs: int) -> str:
+def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int) -> str:
     lines, current = [], None
     for u in units:
         if u.kind == "sentence" and u.section != current:
@@ -73,7 +69,7 @@ def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int, runs:
         "該当するものだけを {\"items\": [{\"id\": \"M12\", \"category\": \"glue\"}]} の形の JSON で答えてください。"
         "該当が無ければ {\"items\": []}。\n\n" + "\n".join(lines)
         # The run marker keeps each run's cache entry separate, so the k runs are independent samples.
-        + f"\n\n（判定 {run}/{runs}）"
+        + f"\n\n（判定 {run}）"
     )
 
 
@@ -102,8 +98,7 @@ def rule_hints(units: list[Sentence]) -> dict[str, str]:
     return hints
 
 
-def detect_surface(markdown: str, provider: Provider, material: list[str] | None = None, runs: int = RUNS,
-                   min_votes: int = MIN_VOTES) -> SurfaceReport:
+def detect_surface(markdown: str, provider: Provider, material: list[str], runs: int, min_votes: int) -> SurfaceReport:
     units = split_sentences(markdown)
     by_id = {u.id: u for u in units}
     hints = rule_hints(units)
@@ -111,7 +106,7 @@ def detect_surface(markdown: str, provider: Provider, material: list[str] | None
         return SurfaceReport(units=len(units), rule=sorted(hints))
 
     def one(i: int) -> list[Pick]:
-        return parse_picks(ask_json(provider, surface_prompt(units, hints, i, runs), surface_schema()), by_id)
+        return parse_picks(ask_json(provider, surface_prompt(units, hints, i), surface_schema()), by_id)
 
     first = min(2, runs)
     with ThreadPoolExecutor(max(1, runs)) as ex:
@@ -125,7 +120,7 @@ def detect_surface(markdown: str, provider: Provider, material: list[str] | None
     for r in results:
         for p in r:
             cats.setdefault(p.id, Counter())[p.category] += 1
-    grams = material_grams(material or [])
+    grams = material_grams(material)
     hits, traced = [], []
     for u in units:
         if votes[u.id] >= need:

@@ -12,7 +12,7 @@ from conftest import always_ask, defaults, roles, serving
 from typer.testing import CliRunner
 
 from kumimasu import cli_common as cc
-from kumimasu.check import check, dash_hits, number_flags
+from kumimasu.check import Votes, check, dash_hits, number_flags
 from kumimasu.cli import app
 from kumimasu.design import design, sync_design
 from kumimasu.draft import draft, draft_prompt
@@ -22,11 +22,12 @@ from kumimasu.interview import interview
 from kumimasu.llm import FakeProvider, get_provider
 from kumimasu.mark import mark
 from kumimasu.model import Design, Project, UnitUse
-from kumimasu.polish import Flag, apply_replacements, neighborhood, polish
+from kumimasu.polish import POLISH_RULES, Flag, apply_replacements, neighborhood, polish
 from kumimasu.revise import instructions, revise
 from kumimasu.textutil import blocks
 from kumimasu.workdir import WorkDir, init_workdir
 
+VOTES = Votes(3, 2)
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLES = ROOT / "tests" / "samples"
 PROJECT = Project(topic="写真の名前を撮影日時にそろえる", audience="写真の整理に困っている人", kind="実用", length=600)
@@ -262,7 +263,7 @@ def _ready(wd, p):
 def test_check_passes_the_design_relations(wd):
     p = scripted()
     _ready(wd, p)
-    rep = check(wd, p, None, fetch=lambda us: [UrlStatus(url=u, status=200) for u in us])
+    rep = check(wd, p, None, "draft.md", VOTES, fetch=lambda us: [UrlStatus(url=u, status=200) for u in us])
     by = {c.id: c for c in rep.checks}
     assert by["drop_absent"].passed is True
     assert by["deep_present"].passed is True
@@ -272,7 +273,7 @@ def test_check_passes_the_design_relations(wd):
     assert by["numbers"].passed is True, by["numbers"].items
     assert by["meta"].passed is True and by["lint"].passed is True
     assert by["links"].passed is True and by["links"].value == "1/1"
-    bad = check(wd, p, None, fetch=lambda us: [UrlStatus(url=u, status=404) for u in us])
+    bad = check(wd, p, None, "draft.md", VOTES, fetch=lambda us: [UrlStatus(url=u, status=404) for u in us])
     assert next(c for c in bad.checks if c.id == "links").passed is False
     assert json.loads((wd.root / "check.json").read_text(encoding="utf-8"))["draft"] == "draft.md"
     assert "deep_space" in (wd.root / "check.txt").read_text(encoding="utf-8")
@@ -281,7 +282,7 @@ def test_check_passes_the_design_relations(wd):
 def test_check_flags_violations(wd):
     p = scripted(draft_text=BAD_DRAFT, present_drop=True, deep_unit_chars=False)
     _ready(wd, p)
-    rep = check(wd, p, None)
+    rep = check(wd, p, None, "draft.md", VOTES)
     by = {c.id: c for c in rep.checks}
     assert by["drop_absent"].passed is False and by["drop_absent"].value == "1/2"
     assert [(i["id"], i["status"]) for i in by["drop_absent"].items] == [("m2", "added"), ("m3", "implied")]
@@ -337,7 +338,7 @@ def test_noise_keeps_other_uses(wd):
 def test_check_skip_and_aside_relations(wd):
     p = scripted(skip_explained=True)
     _ready(wd, p)
-    rep = check(wd, p, None)
+    rep = check(wd, p, None, "draft.md", VOTES)
     by = {c.id: c for c in rep.checks}
     assert by["skip_unexplained"].passed is False and by["skip_unexplained"].items[0]["skip"] == "EXIF とは何か"
     assert by["aside_present"].passed is True and by["aside_present"].value == "1/1"
@@ -352,15 +353,15 @@ def test_surface_rules_and_trace_exclusion():
     md = ("# 題\n\nこの記事では写真の話を見ていきます。Binary Eye は読み取ると GET を送ります。"
           "これにより、手で入力する必要がなくなります。これにより、スキャナーとサーバーの結合が弱くなります。\n")
     fake = FakeProvider(surface_fake)
-    rep = detect_surface(md, fake, ["スキャナーとサーバーの結合が弱くなる"])
+    rep = detect_surface(md, fake, ["スキャナーとサーバーの結合が弱くなる"], 3, 2)
     assert [(h.category, h.votes) for h in rep.hits] == [("signpost", 2), ("glue", 2)]
     assert len(rep.traced) == 1 and "結合" in rep.traced[0].text and rep.runs_used == 2 and len(fake.calls) == 2
-    assert "（判定 1/3）" in fake.calls[0]["prompt"] and "glue:" in fake.calls[0]["prompt"]
+    assert "（判定 1）" in fake.calls[0]["prompt"] and "glue:" in fake.calls[0]["prompt"]
 
 
 def _votes_provider(picks: dict[int, list[str]]):
     def respond(prompt: str) -> str:
-        run = int(re.search(r"（判定 (\d+)/\d+）", prompt)[1])
+        run = int(re.search(r"（判定 (\d+)）", prompt)[1])
         return json.dumps({"items": [{"id": i, "category": "glue"} for i in picks[run]]})
     return respond
 
@@ -372,12 +373,12 @@ def test_surface_majority_runs_are_independent_and_cached(tmp_path):
     md = "# 題\n\n一つ目の文です。二つ目の文です。三つ目の文です。\n"
     inner = FakeProvider(_votes_provider({1: ["M1", "M2"], 2: ["M1", "M3"], 3: ["M1", "M2"]}))
     cached = CachedProvider(inner, tmp_path / "cache")
-    rep = detect_surface(md, cached)
+    rep = detect_surface(md, cached, [], 3, 2)
     assert rep.runs_used == 3 and [(h.id, h.votes) for h in rep.hits] == [("M1", 3), ("M2", 2)] and rep.union == 3
     assert cached.misses == 3 and len(list((tmp_path / "cache").rglob("*.json"))) == 3
-    again = detect_surface(md, cached)
+    again = detect_surface(md, cached, [], 3, 2)
     assert cached.misses == 3 and cached.hits == 3 and [h.id for h in again.hits] == ["M1", "M2"]
-    one = detect_surface(md, FakeProvider(_votes_provider({1: ["M2"], 2: ["M3"], 3: ["M1"]})), min_votes=1)
+    one = detect_surface(md, FakeProvider(_votes_provider({1: ["M2"], 2: ["M3"], 3: ["M1"]})), [], 3, 1)
     assert [h.id for h in one.hits] == ["M1", "M2", "M3"]
 
 
@@ -385,7 +386,7 @@ def test_surface_early_stop_when_two_runs_agree():
     from kumimasu.surface import detect_surface
 
     p = FakeProvider(_votes_provider({1: ["M2"], 2: ["M2"], 3: ["M1"]}))
-    rep = detect_surface("# 題\n\n一つ目の文です。二つ目の文です。\n", p)
+    rep = detect_surface("# 題\n\n一つ目の文です。二つ目の文です。\n", p, [], 3, 2)
     assert rep.runs_used == 2 and len(p.calls) == 2 and [h.id for h in rep.hits] == ["M2"]
 
 
@@ -430,7 +431,7 @@ def _round_provider(always_new: bool = False):
 def test_polish_rounds_redetect_the_edited_neighborhood(wd):
     wd.write("p.md", POLISH_DOC)
     p = _round_provider()
-    res = polish(wd, p, "p.md", ("meta", "glue"), apply=True)
+    res = polish(wd, p, "p.md", ("meta", "glue"), True, VOTES, 3, "p.polished.md")
     assert [(r.hits, r.edits) for r in res.rounds] == [(1, 1), (1, 1), (0, 0)]
     assert [r.runs for r in res.rounds] == [2, 2, 2] and res.calls == 2 + 1 + 2 + 1 + 2
     later = [c["prompt"] for c in p.calls[3:] if "判定" in c["prompt"]]
@@ -443,11 +444,11 @@ def test_polish_rounds_redetect_the_edited_neighborhood(wd):
 
 def test_polish_stops_at_max_rounds_and_lists_without_apply(wd):
     wd.write("p.md", POLISH_DOC)
-    res = polish(wd, _round_provider(always_new=True), "p.md", ("glue",), apply=True, max_rounds=2)
+    res = polish(wd, _round_provider(always_new=True), "p.md", ("glue",), True, VOTES, 2, "p.polished.md")
     assert len(res.rounds) == 2 and [r.edits for r in res.rounds] == [1, 2]
     assert "新しいつなぎ2です。" in (wd.root / "p.polished.md").read_text(encoding="utf-8")
     wd.write("q.md", POLISH_DOC)
-    listed = polish(wd, _round_provider(), "q.md")
+    listed = polish(wd, _round_provider(), "q.md", POLISH_RULES, False, VOTES, 3, "q.polished.md")
     assert len(listed.rounds) == 1 and listed.rounds[0].hits == 1 and listed.out == ""
     assert not (wd.root / "q.polished.md").exists()
 
@@ -496,7 +497,7 @@ def test_dash_hits_skip_code_and_tables():
 def test_polish_rewrites_only_flagged_sentences(wd):
     p = scripted(draft_text=BAD_DRAFT + "\n## 写真の名前は日付が一番だ\n\n日時は秒まで入れる——連写があるから。\n")
     _ready(wd, p)
-    res = polish(wd, p, "draft.md", apply=True, max_rounds=1)
+    res = polish(wd, p, "draft.md", POLISH_RULES, True, VOTES, 1, "draft.polished.md")
     flags = res.rounds[0].flags
     assert [f.rule for f in flags] == ["signpost", "claim_heading", "dash"]
     text = (wd.root / res.out).read_text(encoding="utf-8")
@@ -525,7 +526,7 @@ def test_number_flags_cite_and_material():
 def test_revise_rewrites_once_and_rechecks(wd):
     p = scripted(draft_text=BAD_DRAFT, present_drop=True)
     _ready(wd, p)
-    rep, todo = revise(wd, p, p, None, roles())
+    rep, todo = revise(wd, p, p, None, roles(), VOTES, None, "draft.md", "draft.v2.md")
     assert todo and rep is not None and rep.draft == "draft.v2.md"
     prompt = (wd.root / "draft.v2.prompt.md").read_text(encoding="utf-8")
     assert "# 直す点" in prompt and BAD_DRAFT.strip() in prompt
@@ -536,12 +537,12 @@ def test_revise_rewrites_once_and_rechecks(wd):
 def test_revise_does_nothing_without_failures(wd):
     p = scripted()
     _ready(wd, p)
-    check(wd, p, None)
+    check(wd, p, None, "draft.md", VOTES)
     rep_path = wd.root / "check.json"
     data = json.loads(rep_path.read_text(encoding="utf-8"))
     data["checks"] = [c for c in data["checks"] if c["passed"] is not False]
     rep_path.write_text(json.dumps(data), encoding="utf-8")
-    rep, todo = revise(wd, p, p, None, roles())
+    rep, todo = revise(wd, p, p, None, roles(), VOTES, None, "draft.md", "draft.v2.md")
     assert rep is None and todo == [] and not (wd.root / "draft.v2.md").exists()
 
 

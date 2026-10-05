@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from .check import dash_hits
+from .check import Votes, dash_hits
 from .generate import DATA_NOTE_JA
 from .keep import KeepStore, text_hash
 from .llm import CountingProvider, ask_replacements
-from .surface import GLUE, MIN_VOTES, RUNS, detect_surface
+from .surface import GLUE, detect_surface
 from .textutil import blocks, collapse_blank_lines, edit_text, locate, norm
 from .workdir import WorkDir
 
@@ -24,7 +24,6 @@ class Flag(BaseModel):
 
 
 POLISH_RULES = ("meta", "glue", "dash")
-MAX_ROUNDS = 3
 
 
 POLISH_PROMPT_JA = DATA_NOTE_JA + """
@@ -120,12 +119,12 @@ class PolishResult(BaseModel):
     llm_calls: int = 0
 
 
-def find_flags(scope: str, full: str, provider: Provider, material: list[str], rules: tuple[str, ...], runs: int,
-               min_votes: int, keep: set[str] | frozenset[str] = frozenset()) -> tuple[list[Flag], int]:
+def find_flags(scope: str, full: str, provider: Provider, material: list[str], rules: tuple[str, ...], votes: Votes,
+               keep: set[str]) -> tuple[list[Flag], int]:
     found: list[tuple[str, str]] = []
     used = 0
     if "meta" in rules or GLUE in rules:
-        rep = detect_surface(scope, provider, material, runs, min_votes)
+        rep = detect_surface(scope, provider, material, votes.runs, votes.min_votes)
         used = rep.runs_used
         found += [(h.category, h.text) for h in rep.hits
                   if (h.category == GLUE and GLUE in rules) or (h.category != GLUE and "meta" in rules)]
@@ -139,8 +138,8 @@ def find_flags(scope: str, full: str, provider: Provider, material: list[str], r
     return out, used
 
 
-def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, ...] = POLISH_RULES, apply: bool = False,
-           runs: int = RUNS, min_votes: int = MIN_VOTES, max_rounds: int = MAX_ROUNDS, out: str | None = None) -> PolishResult:
+def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, ...], apply: bool, votes: Votes,
+           max_rounds: int, out: str) -> PolishResult:
     counter = CountingProvider(provider)
     start_misses = counter.misses
     material = [u.text for u in wd.units()]
@@ -150,7 +149,7 @@ def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, .
     res = PolishResult()
     for r in range(1, max_rounds + 1):
         before = counter.calls
-        flags, used = find_flags(scope, text, counter, material, rules, runs, min_votes, keep)
+        flags, used = find_flags(scope, text, counter, material, rules, votes, keep)
         rd = Round(round=r, scope_chars=len(scope), runs=used, hits=len(flags), flags=flags)
         res.rounds.append(rd)
         if not flags or not apply:
@@ -166,7 +165,7 @@ def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, .
     res.calls = counter.calls
     res.llm_calls = counter.misses - start_misses
     if apply:
-        res.out = out or draft_name.removesuffix(".md") + ".polished.md"
+        res.out = out
         wd.write(res.out, text)
         wd.write_json(res.out.removesuffix(".md") + ".json", res.model_dump())
     return res

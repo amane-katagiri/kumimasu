@@ -11,8 +11,8 @@ from . import (
     cli_flow,  # noqa: F401  # registers the checkpoint commands on app
     ops,
 )
+from .check import Votes, report_text
 from .check import check as run_check
-from .check import report_text
 from .cli_common import (
     DirArg,
     DraftOpt,
@@ -201,6 +201,10 @@ def draft(path: DirArg, writer: WriterOpt = None, researcher: ResearcherOpt = No
     typer.echo(f"wrote {wd.root / out} ({len(text)} chars)")
 
 
+def _votes(cfg: Config) -> Votes:
+    return Votes(cfg.get("surface.runs"), cfg.get("surface.min_votes"))
+
+
 def _fetch(verify: bool):
     if not verify:
         return None
@@ -220,8 +224,9 @@ def check(path: DirArg, judge: JudgeOpt = None, meta_detector: MetaOpt = None, d
     cfg = cc.config(path)
     with errors():
         name = check_draft_name(draft_name or wd.draft_base())
-        rep = run_check(wd, cc.llm(cfg, "judge", judge), cc.detector(cfg, meta_detector), name, _fetch(verify_links),
-                        surface_only, cfg.resolve("surface.runs", surface_runs), cfg.get("surface.min_votes"))
+        votes = Votes(cfg.resolve("surface.runs", surface_runs), cfg.get("surface.min_votes"))
+        rep = run_check(wd, cc.llm(cfg, "judge", judge), cc.detector(cfg, meta_detector), name, votes,
+                        _fetch(verify_links), surface_only)
     typer.echo(report_text(rep), nl=False)
 
 
@@ -235,7 +240,7 @@ def revise(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
     dst = src.removesuffix(".md") + ".v2.md"
     with errors():
         rep, todo = run_revise(wd, cc.llm(cfg, "writer", writer), cc.llm(cfg, "judge", judge),
-                               cc.detector(cfg, meta_detector), cfg.roles(), _fetch(verify_links), src, dst)
+                               cc.detector(cfg, meta_detector), cfg.roles(), _votes(cfg), _fetch(verify_links), src, dst)
     if rep is None:
         typer.echo("no failed structural checks; nothing to revise (surface findings go to `polish`)")
         return
@@ -267,7 +272,7 @@ def polish(path: DirArg, draft_name: DraftOpt = None,
     with errors():
         name = check_draft_name(draft_name or wd.draft_base())
         out = check_draft_name(out or name.removesuffix(".md") + ".polished.md")
-        res = run_polish(wd, cc.llm(cfg, "detector", provider), name, chosen, yes, runs, min_votes,
+        res = run_polish(wd, cc.llm(cfg, "detector", provider), name, chosen, yes, Votes(runs, min_votes),
                          cfg.resolve("surface.max_rounds", max_rounds), out)
     for rd in res.rounds:
         typer.echo(f"round {rd.round}: scope {rd.scope_chars} chars, {rd.runs} runs, {rd.hits} hits, {rd.edits} edits, "

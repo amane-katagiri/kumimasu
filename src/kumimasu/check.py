@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
@@ -20,8 +23,6 @@ from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
 from .surface import (
     GLUE,
-    MIN_VOTES,
-    RUNS,
     SurfaceHit,
     SurfaceReport,
     detect_surface,
@@ -58,6 +59,7 @@ class Check(BaseModel):
     value: float | int | str | None = None
     detail: str = ""
     items: list[dict] = []
+    runs: int | None = None
 
 
 class CheckReport(BaseModel):
@@ -183,9 +185,10 @@ def number_flags(markdown: str, material: str) -> tuple[list[dict], list[dict]]:
 Fetch = Callable[[list[str]], list[UrlStatus]]
 
 
-def _c(id: str, relation: str, passed: bool | None, value=None, detail: str = "", items: list[dict] | None = None) -> Check:
+def _c(id: str, relation: str, passed: bool | None, value=None, detail: str = "", items: list[dict] | None = None,
+       runs: int | None = None) -> Check:
     return Check(id=id, relation=relation, passed=passed, value=value, detail=detail, items=items or [],
-                 surface=id in SURFACE)
+                 surface=id in SURFACE, runs=runs)
 
 
 _DASH = re.compile(r"[—―]{1,2}|\s–\s")
@@ -198,137 +201,201 @@ def dash_hits(markdown: str) -> list[str]:
             for s in sentences(line) if _DASH.search(_DASH_IGNORE.sub("", s))]
 
 
-def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: Provider | None,
-               fetch: Fetch | None = None, surface_runs: int = RUNS,
-               keep: set[str] | frozenset[str] = frozenset(), min_votes: int = MIN_VOTES) -> CheckReport:
+@dataclass(frozen=True)
+class Votes:
+    runs: int
+    min_votes: int
+
+
+@dataclass
+class Facts:
+    draft: str
+    units: list[Unit]
+    d: Design
+    presence: dict[str, str]
+    dunits: list[InfoUnit]
+    m: DraftMap
+
+    @cached_property
+    def use(self) -> dict[str, str | None]:
+        return {u.id: self.d.use_of(u.id) for u in self.units}
+
+    @cached_property
+    def by_id(self) -> dict[str, Unit]:
+        return {u.id: u for u in self.units}
+
+    def with_use(self, *uses: str) -> list[Unit]:
+        return [u for u in self.units if self.use[u.id] in uses]
+
+    def missing(self, units: list[Unit]) -> list[Unit]:
+        return [u for u in units if self.presence.get(u.id, "no") == "no"]
+
+    def evidence(self, ids: list[int]) -> list[str]:
+        return [excerpt(self.dunits[e - 1].text, 80) for e in ids]
+
+
+def _short(u: Unit) -> dict:
+    return {"id": u.id, "text": excerpt(u.text, 80)}
+
+
+def _share(n: int, total: int) -> str:
+    return f"{n}/{total}"
+
+
+def check_drop_absent(f: Facts) -> Check:
+    drop = f.with_use("drop")
+    implied = {c.id: c for c in f.d.live_conflicts()}
+    present = [u for u in drop if f.presence.get(u.id) == "yes"]
+    added = [u for u in present if u.id not in implied]
+    return _c("drop_absent", "drop にした単位 → 本文に無い（使う単位から出てしまうもの＝implied は除く）",
+              not added if drop else None, _share(len(added), len(drop)),
+              f"本文に出た drop の単位（一部だけ出たものは数えない）。implied {len(present) - len(added)}",
+              [_short(u) | {"status": "implied" if u.id in implied else "added"}
+               | ({"by": "・".join(implied[u.id].by)} if u.id in implied else {}) for u in present])
+
+
+def check_deep_present(f: Facts) -> Check:
+    deep = f.with_use("deep")
+    missing = f.missing(deep)
+    return _c("deep_present", "deep にした単位 → 本文にある", not missing if deep else None,
+              _share(len(deep) - len(missing), len(deep)), "本文に無い deep の単位", [_short(u) for u in missing])
+
+
+def check_deep_space(f: Facts) -> Check:
+    relation = "deep の単位あたりの字数 > mention の単位あたりの字数"
+    deep = f.with_use("deep")
+    aside = f.d.aside_ids()
+    mention = [u for u in f.with_use("mention") if u.id not in aside]
+    if not deep or not mention:
+        return _c("deep_space", relation, None, None, "deep か mention の単位が無い")
+    space = space_per_unit(f.dunits, f.m)
+    dm = sum(space.get(u.id, 0.0) for u in deep) / len(deep)
+    mm = sum(space.get(u.id, 0.0) for u in mention) / len(mention)
+    return _c("deep_space", relation, dm > mm, round(dm / mm, 2) if mm else None,
+              f"deep {dm:.0f} 字 / mention {mm:.0f} 字（本文の単位を材料へ割り戻した平均）",
+              [{"id": u.id, "use": f.use[u.id], "chars": round(space.get(u.id, 0.0))} for u in deep + mention])
+
+
+def check_firsthand(f: Facts) -> Check:
+    fh = [u for u in f.with_use("deep", "mention") if u.firsthand]
+    lost = f.missing(fh)
+    share = (len(fh) - len(lost)) / len(fh) if fh else None
+    return _c("firsthand_retained", f"使うと決めた手元だけの単位 → {FIRSTHAND_MIN:.0%} 以上が本文に残る",
+              None if share is None else share >= FIRSTHAND_MIN, None if share is None else round(share, 2),
+              "本文に無い手元だけの単位", [_short(u) for u in lost])
+
+
+def _judged(labels: list[str], found: dict[int, tuple[bool, list[int]]], f: Facts, key: str, flag: str) -> list[dict]:
+    out = []
+    for k, label in enumerate(labels, 1):
+        ok, ev = found.get(k, (False, []))
+        out.append({key: label, flag: ok, "evidence": f.evidence(ev)})
+    return out
+
+
+def check_takeaways(f: Facts) -> Check:
+    items = _judged(f.d.takeaways, f.m.takeaways, f, "takeaway", "present")
+    return _c("takeaways", "持ち帰り → 本文から読み取れる", all(x["present"] for x in items) if items else None,
+              _share(sum(x["present"] for x in items), len(items)), "", items)
+
+
+def check_skips(f: Facts) -> Check:
+    items = _judged([x.label for x in f.d.skip], f.m.skips, f, "skip", "explained")
+    explained = [x for x in items if x["explained"]]
+    return _c("skip_unexplained", "skip にした前提 → 本文で説明しない", not explained if items else None,
+              _share(len(explained), len(items)), "説明されてしまった前提", explained)
+
+
+def check_fabrication(f: Facts) -> Check:
+    fab = [{"unit": du.id, "text": excerpt(du.text, 120), "source": "judge"} for du in f.dunits
+           if du.id in f.m.firsthand and not any(f.by_id[s].firsthand for s in f.m.sources.get(du.id, []))]
+    seen = {x["unit"] for x in fab}
+    unmapped = [du for du in f.dunits if not f.m.sources.get(du.id)]
+    for s in firsthand_hits(f.draft):
+        at = locate(f.draft, s)
+        hit = next((du for du in unmapped if at and du.start <= at[0] < du.end), None)
+        if hit and hit.id not in seen:
+            seen.add(hit.id)
+            fab.append({"unit": hit.id, "text": s[:120], "source": "rule"})
+    return _c("fabrication", "材料に無い一人称の体験 → 無い", not fab, len(fab),
+              "書き手の体験として書かれているのに、もとになる手元の材料が無い単位", fab)
+
+
+def check_numbers(draft: str, material: str) -> Check:
+    flagged, cited = number_flags(draft, material)
+    return _c("numbers", "材料に無い数値 → 出典のリンクがある", not flagged, len(flagged),
+              f"出典のリンクが同じ段落にある数値 {len(cited)} 個は数えない", flagged)
+
+
+def check_links(urls: list[str], statuses: list[UrlStatus] | None) -> Check:
+    relation = "材料に無いリンク → 開ける"
+    if statuses is None:
+        return _c("links", relation, None, len(urls), "確かめていない（--verify-links）", [{"url": u} for u in urls])
+    bad = [s for s in statuses if s.verdict in ("dead", "unreachable")]
+    return _c("links", relation, not bad, _share(len(urls) - len(bad), len(urls)), "",
+              [{"url": s.url, "verdict": s.verdict, "status": s.status} for s in statuses])
+
+
+def check_asides(f: Facts) -> Check:
+    asides = [f.by_id[a.id] for a in f.d.aside if a.id in f.by_id]
+    lost = f.missing(asides)
+    return _c("aside_present", "aside にした脱線 → 本文にある", not lost if asides else None,
+              _share(len(asides) - len(lost), len(asides)), "本文に無い脱線", [_short(u) for u in lost])
+
+
+def check_length(chars: int, target: int) -> Check:
+    ratio = chars / target if target else None
+    return _c("length", f"字数 → 目標の ±{LENGTH_TOLERANCE:.0%}", None if ratio is None else abs(ratio - 1) <= LENGTH_TOLERANCE,
+              None if ratio is None else round(ratio, 2), f"{chars} 字 / 目標 {target} 字")
+
+
+def run_checks(name: str, draft: str, units: list[Unit], d: Design, judge: Provider, meta: Provider | None,
+               votes: Votes, keep: set[str], fetch: Fetch | None = None) -> CheckReport:
     d = sync_design(d, units)
-    use = {u.id: d.use_of(u.id) for u in units}
-    by_id = {u.id: u for u in units}
     infos, idmap = as_info_units(units)
-    cov = parse_coverage(ask_json(judge, coverage_prompt(infos, {DRAFT: draft}), coverage_schema()), infos, [DRAFT])
-    presence = {idmap[i]: c.v for i, c in cov.items()}
     dunits = info_units(draft)
     skips = [x.label for x in d.skip]
-    m = parse_map(ask_json(judge, map_prompt(dunits, units, d.takeaways, skips), map_schema()), dunits, units,
-                  len(d.takeaways), len(skips))
-    space = space_per_unit(dunits, m)
-    checks: list[Check] = []
-
-    def short(u: Unit) -> str:
-        return excerpt(u.text, 80)
-
-    drop = [u for u in units if use[u.id] == "drop"]
-    implied = {c.id: c for c in d.live_conflicts()}
-    present_drop = [u for u in drop if presence.get(u.id) == "yes"]
-    added = [u for u in present_drop if u.id not in implied]
-    checks.append(_c("drop_absent", "drop にした単位 → 本文に無い（使う単位から出てしまうもの＝implied は除く）",
-                     not added if drop else None, f"{len(added)}/{len(drop)}",
-                     f"本文に出た drop の単位（一部だけ出たものは数えない）。implied {len(present_drop) - len(added)}",
-                     [{"id": u.id, "status": "implied" if u.id in implied else "added", "text": short(u)}
-                      | ({"by": "・".join(implied[u.id].by)} if u.id in implied else {}) for u in present_drop]))
-    deep = [u for u in units if use[u.id] == "deep"]
-    missing_deep = [u for u in deep if presence.get(u.id, "no") == "no"]
-    checks.append(_c("deep_present", "deep にした単位 → 本文にある", not missing_deep if deep else None,
-                     f"{len(deep) - len(missing_deep)}/{len(deep)}", "本文に無い deep の単位",
-                     [{"id": u.id, "text": short(u)} for u in missing_deep]))
-    mention = [u for u in units if use[u.id] == "mention" and u.id not in d.aside_ids()]
-    if deep and mention:
-        dm = sum(space.get(u.id, 0.0) for u in deep) / len(deep)
-        mm = sum(space.get(u.id, 0.0) for u in mention) / len(mention)
-        checks.append(_c("deep_space", "deep の単位あたりの字数 > mention の単位あたりの字数", dm > mm,
-                         round(dm / mm, 2) if mm else None, f"deep {dm:.0f} 字 / mention {mm:.0f} 字（本文の単位を材料へ割り戻した平均）",
-                         [{"id": u.id, "use": use[u.id], "chars": round(space.get(u.id, 0.0))} for u in deep + mention]))
-    else:
-        checks.append(_c("deep_space", "deep の単位あたりの字数 > mention の単位あたりの字数", None, None,
-                         "deep か mention の単位が無い"))
-    fh = [u for u in units if u.firsthand and use[u.id] in ("deep", "mention")]
-    kept_fh = [u for u in fh if presence.get(u.id, "no") != "no"]
-    share = len(kept_fh) / len(fh) if fh else None
-    checks.append(_c("firsthand_retained", f"使うと決めた手元だけの単位 → {FIRSTHAND_MIN:.0%} 以上が本文に残る",
-                     None if share is None else share >= FIRSTHAND_MIN, None if share is None else round(share, 2),
-                     "本文に無い手元だけの単位", [{"id": u.id, "text": short(u)} for u in fh if u not in kept_fh]))
-    tk_items = []
-    for k, t in enumerate(d.takeaways, 1):
-        ok, ev = m.takeaways.get(k, (False, []))
-        tk_items.append({"takeaway": t, "present": ok,
-                         "evidence": [excerpt(dunits[e - 1].text, 80) for e in ev]})
-    checks.append(_c("takeaways", "持ち帰り → 本文から読み取れる",
-                     all(x["present"] for x in tk_items) if tk_items else None,
-                     f"{sum(x['present'] for x in tk_items)}/{len(tk_items)}", "", tk_items))
-    fab = []
-    for du in dunits:
-        src = m.sources.get(du.id, [])
-        if du.id in m.firsthand and not any(by_id[s].firsthand for s in src):
-            fab.append({"unit": du.id, "text": excerpt(du.text, 120), "source": "judge"})
-    unmapped = [du for du in dunits if not m.sources.get(du.id)]
-    for s in firsthand_hits(draft):
-        at = locate(draft, s)
-        hit = next((du for du in unmapped if at and du.start <= at[0] < du.end), None)
-        if hit and not any(f["unit"] == hit.id for f in fab):
-            fab.append({"unit": hit.id, "text": s[:120], "source": "rule"})
-    checks.append(_c("fabrication", "材料に無い一人称の体験 → 無い", not fab, len(fab),
-                     "書き手の体験として書かれているのに、もとになる手元の材料が無い単位", fab))
     material = "\n".join(u.text for u in units)
-    flagged, cited = number_flags(draft, material)
-    checks.append(_c("numbers", "材料に無い数値 → 出典のリンクがある", not flagged, len(flagged),
-                     f"出典のリンクが同じ段落にある数値 {len(cited)} 個は数えない", flagged))
-    new_urls = [u for u in extract_urls(draft) if u not in material]
-    if fetch is None:
-        checks.append(_c("links", "材料に無いリンク → 開ける", None, len(new_urls), "確かめていない（--verify-links）",
-                         [{"url": u} for u in new_urls]))
-    else:
-        st = fetch(new_urls)
-        bad = [s for s in st if s.verdict in ("dead", "unreachable")]
-        checks.append(_c("links", "材料に無いリンク → 開ける", not bad, f"{len(new_urls) - len(bad)}/{len(new_urls)}",
-                         "", [{"url": s.url, "verdict": s.verdict, "status": s.status} for s in st]))
-    sk_items = []
-    for k, label in enumerate(skips, 1):
-        explained, ev = m.skips.get(k, (False, []))
-        sk_items.append({"skip": label, "explained": explained,
-                         "evidence": [excerpt(dunits[e - 1].text, 80) for e in ev]})
-    checks.append(_c("skip_unexplained", "skip にした前提 → 本文で説明しない",
-                     not any(x["explained"] for x in sk_items) if sk_items else None,
-                     f"{sum(x['explained'] for x in sk_items)}/{len(sk_items)}", "説明されてしまった前提",
-                     [x for x in sk_items if x["explained"]]))
-    asides = [by_id[a.id] for a in d.aside if a.id in by_id]
-    lost = [u for u in asides if presence.get(u.id, "no") == "no"]
-    checks.append(_c("aside_present", "aside にした脱線 → 本文にある", not lost if asides else None,
-                     f"{len(asides) - len(lost)}/{len(asides)}", "本文に無い脱線", [{"id": u.id, "text": short(u)} for u in lost]))
-    checks += surface_checks(draft, units, meta, surface_runs, keep, min_votes)
-    chars = draft_chars(dunits)
-    ratio = chars / d.target_length if d.target_length else None
-    checks.append(_c("length", f"字数 → 目標の ±{LENGTH_TOLERANCE:.0%}",
-                     None if ratio is None else abs(ratio - 1) <= LENGTH_TOLERANCE,
-                     None if ratio is None else round(ratio, 2), f"{chars} 字 / 目標 {d.target_length} 字"))
-    return CheckReport(draft="", chars=chars, checks=checks, sources=m.sources)
+    urls = [u for u in extract_urls(draft) if u not in material]
+    with ThreadPoolExecutor(4) as pool:
+        cov = pool.submit(ask_json, judge, coverage_prompt(infos, {DRAFT: draft}), coverage_schema())
+        mapped = pool.submit(ask_json, judge, map_prompt(dunits, units, d.takeaways, skips), map_schema())
+        surface = pool.submit(surface_checks, draft, units, meta, votes, keep)
+        links = pool.submit(fetch, urls) if fetch is not None else None
+        presence = {idmap[i]: c.v for i, c in parse_coverage(cov.result(), infos, [DRAFT]).items()}
+        m = parse_map(mapped.result(), dunits, units, len(d.takeaways), len(skips))
+        f = Facts(draft, units, d, presence, dunits, m)
+        checks = [check_drop_absent(f), check_deep_present(f), check_deep_space(f), check_firsthand(f),
+                  check_takeaways(f), check_fabrication(f), check_numbers(draft, material),
+                  check_links(urls, links.result() if links else None), check_skips(f), check_asides(f),
+                  *surface.result(), check_length(draft_chars(dunits), d.target_length)]
+    return CheckReport(draft=name, chars=draft_chars(dunits), checks=checks, sources=m.sources)
 
 
-def surface_hits(draft: str, units: list[Unit], meta: Provider | None, runs: int = RUNS,
-                 min_votes: int = MIN_VOTES) -> SurfaceReport:
+def surface_hits(draft: str, units: list[Unit], meta: Provider | None, votes: Votes) -> SurfaceReport:
     if meta is None:
         su = split_sentences(draft)
         hints = rule_hints(su)
         return SurfaceReport(units=len(su), hits=[SurfaceHit(id=u.id, category=hints[u.id], text=u.text, heading=u.heading,
                                                              votes=1) for u in su if u.id in hints])
-    return detect_surface(draft, meta, [u.text for u in units], runs, min_votes)
+    return detect_surface(draft, meta, [u.text for u in units], votes.runs, votes.min_votes)
 
 
-def surface_checks(draft: str, units: list[Unit], meta: Provider | None, runs: int = RUNS,
-                   keep: set[str] | frozenset[str] = frozenset(), min_votes: int = MIN_VOTES) -> list[Check]:
-    sr = surface_hits(draft, units, meta, runs, min_votes)
+def surface_checks(draft: str, units: list[Unit], meta: Provider | None, votes: Votes, keep: set[str]) -> list[Check]:
+    sr = surface_hits(draft, units, meta, votes)
     kept = [h for h in sr.hits if text_hash(h.text) in keep]
     meta_hits = [h for h in sr.hits if h.category != GLUE and h not in kept]
     glue_hits = [h for h in sr.hits if h.category == GLUE and h not in kept]
-    votes = f"{sr.runs_used} 回の判定の多数決" if sr.runs_used else "規則だけ"
-    out = [_c("meta", "メタ言説 → 無い", not meta_hits, len(meta_hits), votes,
-              [{"id": h.id, "category": h.category, "text": h.text, "votes": h.votes} for h in meta_hits]),
+    runs = sr.runs_used or None
+    how = f"{runs} 回の判定の多数決" if runs else "規則だけ"
+    out = [_c("meta", "メタ言説 → 無い", not meta_hits, len(meta_hits),
+              how + (f"。残すと決めた文 {len(kept)} は数えない" if kept else ""),
+              [{"id": h.id, "category": h.category, "text": h.text, "votes": h.votes} for h in meta_hits], runs),
            _c("glue", "材料の事実を運ばない、話題を読者の役立ちに結びつけるだけの文 → 無い", not glue_hits, len(glue_hits),
-              f"{votes}。材料の文をほぼ繰り返すので除いた文 {len(sr.traced)}",
-              [{"id": h.id, "text": h.text, "votes": h.votes} for h in glue_hits])]
+              f"{how}。材料の文をほぼ繰り返すので除いた文 {len(sr.traced)}",
+              [{"id": h.id, "text": h.text, "votes": h.votes} for h in glue_hits], runs)]
     lf = [{"rule": f.rule, "text": f.excerpt} for f in parts_lint(parse_parts(draft)) if f.rule in LINT_RULES]
     lf += [{"rule": "dash", "text": s} for s in dash_hits(draft) if text_hash(s) not in keep]
-    if kept:
-        out[0].detail += f"。残すと決めた文 {len(kept)} は数えない"
     out.append(_c("lint", "太字で始まる箇条書き・ダッシュ・絵文字・飾り記号・太字の多用 → 無い", not lf, len(lf), "", lf))
     return out
 
@@ -352,20 +419,26 @@ def report_text(rep: CheckReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str = "draft.md",
-          fetch: Fetch | None = None, surface_only: bool = False, surface_runs: int = RUNS,
-          min_votes: int = MIN_VOTES) -> CheckReport:
+def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str, votes: Votes, fetch: Fetch | None = None,
+          surface_only: bool = False) -> CheckReport:
     text = wd.read(name)
+    keep = KeepStore(wd).hashes()
     if surface_only:
         rep = CheckReport(draft=name, chars=draft_chars(info_units(text)),
-                          checks=surface_checks(text, wd.units(), meta, surface_runs, KeepStore(wd).hashes(), min_votes))
+                          checks=surface_checks(text, wd.units(), meta, votes, keep))
     else:
-        rep = run_checks(text, wd.units(), wd.design(), judge, meta, fetch, surface_runs, KeepStore(wd).hashes(), min_votes)
-    rep.draft = name
+        rep = run_checks(name, text, wd.units(), wd.design(), judge, meta, votes, keep, fetch)
     stem = check_stem(name, surface_only)
     wd.write_json(f"{stem}.json", rep.model_dump())
     wd.write(f"{stem}.txt", report_text(rep))
     return rep
+
+
+def fresh_report(wd: WorkDir, draft: str, surface_only: bool) -> CheckReport | None:
+    p = wd.root / f"{check_stem(draft, surface_only)}.json"
+    if p.is_file() and p.stat().st_mtime >= (wd.root / draft).stat().st_mtime:
+        return CheckReport.model_validate_json(p.read_text(encoding="utf-8"))
+    return None
 
 
 def check_stem(draft_name: str, surface_only: bool = False) -> str:

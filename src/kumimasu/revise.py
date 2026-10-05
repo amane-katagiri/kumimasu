@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .check import CheckReport, Fetch, check
+from .check import CheckReport, Fetch, Votes, check, fresh_report
 from .design import sync_design
 from .draft import design_block, write_used
 from .generate import DATA_NOTE_JA, OUTPUT_FORMAT_JA, SOURCES_RULES_JA, article_from
@@ -74,14 +74,9 @@ def revise_prompt(block: str, draft: str, todo: list[str], research: Research | 
     ] if x)
 
 
-def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None, roles: dict[str, str],
-           fetch: Fetch | None = None,
-           src: str = "draft.md", dst: str = "draft.v2.md") -> tuple[CheckReport | None, list[str]]:
-    rep_path = wd.root / (src.removesuffix(".md").replace("draft", "check") + ".json")
-    if rep_path.exists() and rep_path.stat().st_mtime >= (wd.root / src).stat().st_mtime:
-        rep = CheckReport.model_validate_json(rep_path.read_text(encoding="utf-8"))
-    else:
-        rep = check(wd, judge, meta, src, fetch)
+def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None, roles: dict[str, str], votes: Votes,
+           fetch: Fetch | None, src: str, dst: str) -> tuple[CheckReport | None, list[str]]:
+    rep = fresh_report(wd, src, False) or check(wd, judge, meta, src, votes, fetch)
     p, units = wd.project(), wd.units()
     d = sync_design(wd.design(), units)
     todo = instructions(rep, d.target_length)
@@ -91,4 +86,4 @@ def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None
     wd.write(dst.replace(".md", ".prompt.md"), prompt)
     write_used(wd, dst, d, d.drop_list, roles | {"writer": f"{writer.name}:{writer.model}"})
     wd.write(dst, article_from(writer.complete(prompt)))
-    return check(wd, judge, meta, dst, fetch), todo
+    return check(wd, judge, meta, dst, votes, fetch), todo
