@@ -1,0 +1,415 @@
+from __future__ import annotations
+
+import json
+import threading
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+import pytest
+import yaml
+from typer.testing import CliRunner
+
+from kumimasu.cli import app
+from kumimasu.llm import FakeProvider
+from kumimasu.render import render
+from kumimasu.check import Check, CheckReport, dash_hits, load_keep, surface_checks, text_hash
+from kumimasu.model import Project
+from kumimasu.polish import find_flags
+from kumimasu.review import apply_review, delete_spans, find_span, load_review, review_path, save_decisions
+from kumimasu.server import WriteApp, make_server
+from kumimasu.workdir import WorkDir, init_workdir
+
+ROOT = Path(__file__).resolve().parent.parent
+PROJECT = Project(topic="縦書き", audience="個人サイトを作る人", length=600)
+
+DRAFT = """# 縦書きのウェブページ
+
+## 括弧の向き
+
+この記事では、括弧の扱いを見ていきます。**縦中横**は `text-combine-upright` で指定します。ここで 2 つの記号を直しました。
+
+- 一つ目の項目です。
+- これにより、読みやすくなります。
+
+`…` と `―` は `mixed` に戻しました——理由は後述します。
+
+```css
+p { text-orientation: upright; } /* この記事では */
+```
+
+最後の段落です。手元で 120 回試しました。
+"""
+
+
+@pytest.fixture
+def wd(tmp_path) -> WorkDir:
+    w, _ = init_workdir(tmp_path / "w", PROJECT.model_copy(update={"stage": "review"}),
+                        [ROOT / "tests" / "samples" / "notes.md"])
+    w.write("draft.md", DRAFT)
+    return w
+
+
+def report(*checks: Check, sources: dict[int, list[str]] | None = None) -> CheckReport:
+    return CheckReport(draft="draft.md", chars=0, checks=list(checks), sources=sources or {})
+
+
+def write_report(wd: WorkDir, rep: CheckReport, name: str = "check.json") -> None:
+    (wd.root / name).write_text(rep.model_dump_json(), encoding="utf-8")
+
+
+def standard_report(wd: WorkDir) -> CheckReport:
+    from kumimasu.payload import info_units
+
+    last = next(u for u in info_units(DRAFT) if u.text.startswith("最後の段落"))
+    rep = report(
+        Check(id="meta", relation="r", passed=False, detail="3 回の判定の多数決", surface=True,
+              items=[{"id": "M1", "category": "signpost", "text": "この記事では、括弧の扱いを見ていきます。", "votes": 3}]),
+        Check(id="glue", relation="r", passed=False, detail="3 回の判定の多数決。", surface=True,
+              items=[{"id": "M5", "text": "これにより、読みやすくなります。", "votes": 2}]),
+        Check(id="lint", relation="lint", passed=False, surface=True,
+              items=[{"rule": "dash", "text": "`…` と `―` は `mixed` に戻しました——理由は後述します。"}]),
+        Check(id="numbers", relation="数値", passed=False, items=[{"number": "120", "context": "最後の段落です。手元で 120 回試しました。"}]),
+        Check(id="fabrication", relation="体験", passed=False, detail="材料に無い",
+              items=[{"unit": last.id, "text": "手元で 120 回試しました。", "source": "judge"}]),
+        Check(id="drop_absent", relation="drop", passed=False,
+              items=[{"id": "m2", "status": "added", "text": "EXIF の DateTimeOriginal"}]),
+        sources={last.id: ["m2"]},
+    )
+    write_report(wd, rep)
+    return rep
+
+
+def test_items_have_offsets_that_match_the_source_and_rendered_spans(wd):
+    standard_report(wd)
+    rev = load_review(wd, "draft.md")
+    by_kind = {i.kind: i for i in rev.items}
+    assert set(by_kind) == {"meta", "glue", "lint", "number", "fabrication", "drop"}
+    assert DRAFT[by_kind["meta"].start:by_kind["meta"].end] == "この記事では、括弧の扱いを見ていきます。"
+    assert DRAFT[by_kind["glue"].start:by_kind["glue"].end] == "これにより、読みやすくなります。"
+    assert DRAFT[by_kind["number"].start:by_kind["number"].end] == "120"
+    assert DRAFT[by_kind["fabrication"].start:by_kind["fabrication"].end].startswith("最後の段落")
+    assert by_kind["drop"].start == by_kind["fabrication"].start and by_kind["drop"].unit["id"] == "m2"
+    assert by_kind["meta"].votes == "3/3" and by_kind["glue"].votes == "2/3" and "道しるべ" in by_kind["meta"].reason
+    html, _ = render(DRAFT)
+    import re
+
+    starts = sorted(int(m[1]) for m in re.finditer(r'data-s="(\d+)"', html))
+    for it in rev.items:
+        assert any(s <= it.start < s + 200 for s in starts)
+    assert find_span("a **b** c", "abc") == (0, 9)
+
+
+def test_decisions_persist_and_keep_is_remembered(wd):
+    standard_report(wd)
+    rev = load_review(wd, "draft.md")
+    meta = next(i for i in rev.items if i.kind == "meta")
+    glue = next(i for i in rev.items if i.kind == "glue")
+    a = DRAFT.index("最後の段落です。")
+    saved = save_decisions(wd, "draft.md", {"items": [
+        {"id": meta.id, "decision": "keep"}, {"id": glue.id, "decision": "rewrite", "note": "短く"},
+        {"id": "user-1", "decision": "delete", "start": a, "end": a + len("最後の段落です。")}]})
+    assert review_path(wd, "draft.md").exists()
+    again = load_review(wd, "draft.md")
+    got = {i.id: (i.decision, i.note) for i in again.items}
+    assert got[meta.id] == ("keep", "") and got[glue.id] == ("rewrite", "短く") and got["user-1"] == ("delete", "")
+    assert next(i for i in saved.items if i.id == "user-1").text == "最後の段落です。"
+    assert text_hash(meta.text) in load_keep(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": ""}]})
+    assert text_hash(meta.text) not in load_keep(wd) and any(i.kind == "user" for i in load_review(wd, "draft.md").items)
+    save_decisions(wd, "draft.md", {"remove": ["user-1"]})
+    assert all(i.kind != "user" for i in load_review(wd, "draft.md").items)
+    with pytest.raises(ValueError):
+        save_decisions(wd, "draft.md", {"items": [{"id": "meta-nope", "decision": "keep"}]})
+    with pytest.raises(ValueError):
+        save_decisions(wd, "draft.md", {"items": [{"id": "user-2", "start": 5, "end": 99999}]})
+
+
+def test_keep_from_another_review_marks_new_items_and_suppresses_checks(wd):
+    standard_report(wd)
+    meta = next(i for i in load_review(wd, "draft.md").items if i.kind == "meta")
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "keep"}]})
+    wd.write("draft.v2.md", DRAFT)
+    write_report(wd, standard_report(wd), "check.v2.json")
+    assert next(i for i in load_review(wd, "draft.v2.md").items if i.kind == "meta").decision == "keep"
+    keep = load_keep(wd)
+    checks = {c.id: c for c in surface_checks(DRAFT, [], None, keep=keep)}
+    assert all("見ていきます" not in x["text"] for x in checks["meta"].items) and "残すと決めた文 1" in checks["meta"].detail
+    flags, _ = find_flags(DRAFT, DRAFT, FakeProvider(lambda p: json.dumps({"items": [{"id": "M1", "category": "signpost"}]})),
+                          [], ("meta",), 3, 2, keep)
+    assert flags == []
+
+
+def test_dash_lint_ignores_code_and_quoted_dashes():
+    md = "`…` と `―` は戻しました。\n\n「―」を縦にすると崩れます。\n\n理由は後述します——たぶん。\n\n```\na — b\n```\n"
+    assert dash_hits(md) == ["理由は後述します——たぶん。"]
+
+
+def test_delete_spans_tidies_and_never_touches_code():
+    src = DRAFT
+    s1 = src.index("この記事では、括弧")
+    sent = "この記事では、括弧の扱いを見ていきます。"
+    item = "- これにより、読みやすくなります。"
+    code_at = src.index("/* この記事では */")
+    para = src.index("最後の段落です。手元で 120 回試しました。")
+    out = delete_spans(src, [(s1, s1 + len(sent)), (src.index(item) + 2, src.index(item) + len(item)),
+                             (code_at, code_at + 5), (para, para + len("最後の段落です。手元で 120 回試しました。"))])
+    assert sent not in out and "\n- これにより" not in out and "- \n" not in out
+    assert "**縦中横**は" in out and out.count("/* この記事では */") == 1 and "最後の段落" not in out
+    assert "\n\n\n" not in out and out.endswith("```\n") and "- 一つ目の項目です。\n\n`…`" in out
+
+
+def test_apply_deletes_and_rewrites_with_one_call(wd):
+    standard_report(wd)
+    rev = load_review(wd, "draft.md")
+    meta = next(i for i in rev.items if i.kind == "meta")
+    glue = next(i for i in rev.items if i.kind == "glue")
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "delete"},
+                                              {"id": glue.id, "decision": "rewrite", "note": "具体的に"}]})
+    with pytest.raises(ValueError):
+        apply_review(wd, "draft.md", None)
+    p = FakeProvider(lambda prompt: json.dumps({"items": [{"id": glue.id, "replacement": "縦書きで読める。"}]}))
+    res = apply_review(wd, "draft.md", p)
+    final = (wd.root / "draft.final.md").read_text(encoding="utf-8")
+    assert res.out == "draft.final.md" and res.deleted == 1 and res.rewritten == 1 and res.calls == 1
+    assert "見ていきます" not in final and "- 縦書きで読める。" in final and "/* この記事では */" in final
+    assert "著者のメモ: 具体的に" in p.calls[0]["prompt"] and "- 一つ目の項目です。" in p.calls[0]["prompt"]
+    assert ["-", "この記事では、括弧の扱いを見ていきます。**縦中横**は `text-combine-upright` で指定します。ここで 2 つの記号を直しました。"] in res.diff
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "keep"}]})
+    res2 = apply_review(wd, "draft.md", None)
+    assert res2.calls == 0 and res2.rewritten == 0
+
+
+def _req(url: str, method: str = "GET", body: dict | None = None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read().decode() or "null") if "json" in r.headers.get("Content-Type", "") else r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def test_server_final_check_round_trip(wd):
+    standard_report(wd)
+    wd.write("draft.prompt.md", "x")
+    rewriter = FakeProvider(lambda prompt: json.dumps({"items": []}))
+    server = make_server(WriteApp(wd, lambda: rewriter), 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        assert _req(base + "/api/drafts") == (200, {"drafts": [{"name": "draft.md", "final": None}]})
+        assert _req(base + "/api/final/draft.md")[0] == 404
+        assert _req(base + "/api/download/draft.md")[0] == 404
+        code, r = _req(base + "/api/review/draft.md")
+        assert code == 200 and 'data-s="' in r["html"] and len(r["items"]) == 6 and r["checked"]
+        meta = next(i for i in r["items"] if i["kind"] == "meta")
+        code, r = _req(base + "/api/review/draft.md", "PUT", {"items": [{"id": meta["id"], "decision": "delete"}]})
+        assert code == 200 and next(i for i in r["items"] if i["id"] == meta["id"])["decision"] == "delete"
+        assert yaml.safe_load(review_path(wd, "draft.md").read_text(encoding="utf-8"))["items"]
+        code, r = _req(base + "/api/apply/draft.md", "POST")
+        assert code == 200 and r["out"] == "draft.final.md" and r["deleted"] == 1 and r["calls"] == 0
+        assert _req(base + "/api/drafts")[1]["drafts"] == [{"name": "draft.md", "final": "draft.final.md"}]
+        code, f = _req(base + "/api/final/draft.md")
+        assert code == 200 and f["final"] == "draft.final.md" and "見ていきます" not in f["markdown"] and "data-s" in f["html"]
+        with urllib.request.urlopen(base + "/api/download/draft.md") as resp:
+            assert resp.read().decode("utf-8") == f["markdown"]
+            disp = resp.headers["Content-Disposition"]
+        assert disp.startswith("attachment; filename*=UTF-8''w-draft-") and disp.endswith(".md")
+        for bad in ("draft.final.md", "draft.final.final.md"):
+            assert _req(base + f"/api/review/{bad}")[0] == 404 and _req(base + f"/api/apply/{bad}", "POST")[0] == 404
+        assert _req(base + "/api/review/draft.prompt.md")[0] == 404
+        assert _req(base + "/api/review/..%2Fproject.yaml")[0] == 404
+        assert "最終チェック" in _req(base + "/")[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_cli_apply(wd, monkeypatch):
+    from kumimasu import cli as cli_mod
+
+    standard_report(wd)
+    glue = next(i for i in load_review(wd, "draft.md").items if i.kind == "glue")
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    p = FakeProvider(lambda prompt: json.dumps({"items": [{"id": glue.id, "replacement": "別の文。"}]}))
+    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: p)
+    res = CliRunner().invoke(app, ["apply", str(wd.root)])
+    assert res.exit_code == 0, res.output
+    assert "rewritten 1" in res.output and "+ - 別の文。" in res.output
+
+
+def test_base_drafts_and_finals(wd):
+    from kumimasu.review import base_drafts, base_of, final_name, is_final
+
+    for n in ("draft.final.md", "draft.final.final.md", "draft.v2.md", "draft.v2.prompt.md", "draft.C.polished.md",
+              "draft.C.polished.final.md", "draftfinal.md"):
+        wd.write(n, "x\n")
+    assert base_drafts(wd) == ["draft.C.polished.md", "draft.md", "draft.v2.md", "draftfinal.md"]
+    assert is_final("draft.final.final.md") and not is_final("draft.finality.md") and base_of("draft.v2.final.final.md") == "draft.v2.md"
+    assert final_name("draft.C.md") == "draft.C.final.md"
+
+
+def test_apply_and_export_reject_finals(wd, tmp_path):
+    from kumimasu.review import export_final
+
+    wd.write("draft.final.md", DRAFT)
+    with pytest.raises(ValueError, match="元の下書き draft.md"):
+        apply_review(wd, "draft.final.md", None)
+    res = CliRunner().invoke(app, ["apply", str(wd.root), "--draft", "draft.final.md"])
+    assert res.exit_code == 1 and "反映の出力" in res.output
+    with pytest.raises(ValueError, match="反映の出力"):
+        export_final(wd, "draft.final.md", tmp_path / "out")
+
+
+def test_export_naming_never_overwrites(wd, tmp_path):
+    from datetime import datetime
+
+    from kumimasu.review import export_final
+
+    with pytest.raises(ValueError):
+        export_final(wd, "draft.md", tmp_path / "out")
+    wd.write("draft.final.md", "final text\n")
+    t = datetime(2026, 10, 5, 14, 7)
+    a = export_final(wd, "draft.md", tmp_path / "out", t)
+    b = export_final(wd, "draft.md", tmp_path / "out", t)
+    c = export_final(wd, "draft.md", tmp_path / "out", t)
+    assert [p.name for p in (a, b, c)] == ["w-draft-20261005-1407.md", "w-draft-20261005-1407-2.md", "w-draft-20261005-1407-3.md"]
+    assert a.read_text(encoding="utf-8") == "final text\n"
+    res = CliRunner().invoke(app, ["export", str(wd.root), "--to", str(tmp_path / "cli")])
+    assert res.exit_code == 0 and len(list((tmp_path / "cli").glob("w-draft-*.md"))) == 1
+
+
+def _two_rewrites(wd):
+    standard_report(wd)
+    rev = load_review(wd, "draft.md")
+    meta = next(i for i in rev.items if i.kind == "meta")
+    glue = next(i for i in rev.items if i.kind == "glue")
+    return meta, glue
+
+
+def _echo_provider(tag: str):
+    def respond(prompt: str) -> str:
+        import re
+
+        ids = re.findall(r"^## 項目 (\S+)$", prompt, re.M)
+        return json.dumps({"items": [{"id": i, "replacement": f"{tag}{n}。"} for n, i in enumerate(ids)]})
+    return FakeProvider(respond)
+
+
+def test_rewrites_are_locked_and_only_new_items_are_sent(wd):
+    meta, glue = _two_rewrites(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    p1 = _echo_provider("一回目")
+    r1 = apply_review(wd, "draft.md", p1)
+    assert r1.calls == 1 and r1.reused == 0
+    stored = next(i for i in load_review(wd, "draft.md").items if i.id == glue.id).rewrite
+    assert stored.result == "一回目0。" and stored.source == "llm" and stored.made_from == "これにより、読みやすくなります。"
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "rewrite", "note": "短く"}]})
+    p2 = _echo_provider("二回目")
+    r2 = apply_review(wd, "draft.md", p2)
+    prompt = p2.calls[0]["prompt"]
+    assert r2.calls == 1 and r2.reused == 1 and glue.id not in prompt and meta.id in prompt
+    final = (wd.root / "draft.final.md").read_text(encoding="utf-8")
+    assert "一回目0。" in final and "二回目0。" in final
+    r3 = apply_review(wd, "draft.md", None)
+    assert r3.calls == 0 and r3.reused == 2 and (wd.root / "draft.final.md").read_text(encoding="utf-8") == final
+
+
+def test_regenerate_user_edit_note_hint_and_stale(wd):
+    meta, glue = _two_rewrites(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}, {"id": meta.id, "decision": "rewrite"}]})
+    apply_review(wd, "draft.md", _echo_provider("初"))
+    rev = save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "note": "もっと具体的に"},
+                                                    {"id": meta.id, "result": "手で直した文。"}]})
+    by = {i.id: i for i in rev.items}
+    assert by[glue.id].note_changed and by[glue.id].rewrite.result.startswith("初")
+    assert by[meta.id].rewrite.source == "user" and by[meta.id].rewrite.result == "手で直した文。" and not by[meta.id].note_changed
+    assert apply_review(wd, "draft.md", None).calls == 0
+    assert "手で直した文。" in (wd.root / "draft.final.md").read_text(encoding="utf-8")
+    p = _echo_provider("再")
+    r = apply_review(wd, "draft.md", p, regenerate=(glue.id,))
+    assert r.calls == 1 and meta.id not in p.calls[0]["prompt"] and "もっと具体的に" in p.calls[0]["prompt"]
+    assert not next(i for i in load_review(wd, "draft.md").items if i.id == glue.id).note_changed
+    rev = save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "regenerate": True}]})
+    assert next(i for i in rev.items if i.id == meta.id).rewrite is None
+    wd.write("draft.md", DRAFT.replace("これにより、読みやすくなります。", "これにより、とても読みやすくなります。"))
+    write_report(wd, standard_report(wd))
+    wd.write("draft.md", DRAFT.replace("これにより、読みやすくなります。", "これにより、とても読みやすくなります。"))
+    rev = load_review(wd, "draft.md")
+    stale = [i for i in rev.items if i.stale]
+    assert [i.id for i in stale] == [glue.id]
+    r = apply_review(wd, "draft.md", _echo_provider("新"))
+    assert glue.id in r.stale and "とても読みやすくなります" in (wd.root / "draft.final.md").read_text(encoding="utf-8")
+
+
+def test_cli_apply_regenerate(wd, monkeypatch):
+    from kumimasu import cli as cli_mod
+
+    meta, glue = _two_rewrites(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    p = _echo_provider("x")
+    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: p)
+    r = CliRunner()
+    assert "calls 1" in r.invoke(app, ["apply", str(wd.root)]).output
+    assert "calls 0" in r.invoke(app, ["apply", str(wd.root)]).output
+    out = r.invoke(app, ["apply", str(wd.root), "--regenerate", glue.id]).output
+    assert "calls 1" in out and len(p.calls) == 2
+    bad = r.invoke(app, ["apply", str(wd.root), "--regenerate", "nope"])
+    assert bad.exit_code == 1 and "unknown item ids" in bad.output
+
+
+def test_rewrite_reanchors_when_the_sentence_moved(wd):
+    meta, glue = _two_rewrites(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    apply_review(wd, "draft.md", _echo_provider("固"))
+    moved = DRAFT.replace("最初", "最初").replace("## 括弧の向き\n\n", "## 括弧の向き\n\n前に一文を足しました。\n\n")
+    wd.write("draft.md", moved)
+    write_report(wd, standard_report(wd))
+    it = next(i for i in load_review(wd, "draft.md").items if i.id == glue.id)
+    assert not it.stale and moved[it.start:it.end] == "これにより、読みやすくなります。"
+    r = apply_review(wd, "draft.md", None)
+    assert r.calls == 0 and r.reused == 1 and "固0。" in (wd.root / "draft.final.md").read_text(encoding="utf-8")
+    twice = moved + "\nこれにより、読みやすくなります。\n"
+    wd.write("draft.md", twice)
+    write_report(wd, standard_report(wd))
+    from kumimasu.review import Item, Rewrite, mark_flags
+
+    x = Item(id="x", kind="glue", start=0, end=3, text="t",
+             rewrite=Rewrite(result="r", made_from="これにより、読みやすくなります。"))
+    mark_flags(x, twice)
+    assert x.stale
+    u = Item(id="user-1", kind="user", start=0, end=4, text="前に一文を")
+    mark_flags(u, moved)
+    assert not u.stale and moved[u.start:u.end] == "前に一文を"
+
+
+def test_final_changes_locates_rewrites_and_deletions():
+    from kumimasu.review import Item, Review, Rewrite, final_changes
+
+    base = "前置きの文です。消す文です。残る文です。直す文です。"
+    final = "前置きの文です。残る文です。直した文です。"
+    rev = Review(draft="draft.md", items=[
+        Item(id="d", kind="meta", start=8, end=14, text="消す文です。", decision="delete"),
+        Item(id="r", kind="glue", start=20, end=26, text="直す文です。", decision="rewrite",
+             rewrite=Rewrite(result="直した文です。", made_from="直す文です。")),
+    ])
+    got = {c["id"]: c for c in final_changes(base, final, rev)}
+    assert got["d"]["kind"] == "deleted" and got["d"]["start"] == got["d"]["end"] == 8
+    assert final[got["r"]["start"]:got["r"]["end"]] == "直した文です。"
+    assert got["r"]["before"] == "直す文です。"
+
+
+def test_needs_apply_tracks_decisions_since_last_apply(wd):
+    from kumimasu.review import needs_apply
+
+    standard_report(wd)
+    meta = next(i for i in load_review(wd, "draft.md").items if i.kind == "meta")
+    assert needs_apply(wd, "draft.md")
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "delete"}]})
+    apply_review(wd, "draft.md", None)
+    assert not needs_apply(wd, "draft.md")
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "keep"}]})
+    assert needs_apply(wd, "draft.md")
+    save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "delete"}]})
+    assert not needs_apply(wd, "draft.md")

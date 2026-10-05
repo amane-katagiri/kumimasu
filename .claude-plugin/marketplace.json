@@ -1,0 +1,14 @@
+{
+  "name": "kumimasu",
+  "owner": {
+    "name": "Amane Katagiri"
+  },
+  "description": "kumimasu: 著者の材料から記事を書くスキル",
+  "plugins": [
+    {
+      "name": "kumimasu",
+      "source": "./",
+      "description": "著者の材料から、インタビュー・設計・一発書き・検査・最終チェックの順に記事を書くスキル（kumimasu CLI を使う）"
+    }
+  ]
+}

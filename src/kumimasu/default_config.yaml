@@ -1,0 +1,30 @@
+providers:
+  writer: claude-cli:opus
+  baseline: claude-cli:opus
+  judge: claude-cli:sonnet
+  interviewer: claude-cli:sonnet
+  designer: claude-cli:sonnet
+  detector: claude-cli:sonnet
+  rewriter: claude-cli:sonnet
+  auto: claude-cli:sonnet
+surface:
+  runs: 3
+  min_votes: 2
+  max_rounds: 3
+cache_dir: ~/.cache/kumimasu
+rules_file: ~/.config/kumimasu/rules.yaml
+serve:
+  port: 8792
+  poll_seconds: 3
+workdir_root: null
+defaults:
+  register: keitai
+  drop_list: topics
+  avoid: []
+  noise:
+    skip_max: 3
+    aside_max: 2
+  forms: ""
+interview:
+  always_ask:
+    - 読者に一つだけ持ち帰ってほしいことは何ですか

@@ -1,0 +1,39 @@
+[project]
+name = "kumimasu"
+version = "0.1.0"
+description = "Write an article from the author's own material: interview, design, one-shot draft, checks and a final human review"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Amane Katagiri" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "markdown-it-py>=4.2.0",
+    "pydantic>=2.13.5",
+    "pyyaml>=6.0.3",
+    "typer>=0.27.2",
+]
+
+[project.urls]
+Repository = "https://github.com/vividoyomogimochi/kumimasu"
+
+[project.scripts]
+kumimasu = "kumimasu.cli:main"
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.50"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

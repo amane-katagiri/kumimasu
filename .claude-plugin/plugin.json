@@ -1,0 +1,12 @@
+{
+  "name": "kumimasu",
+  "version": "0.1.0",
+  "description": "著者の材料から、インタビュー・設計・一発書き・検査・最終チェックの順に記事を書くスキル（kumimasu CLI を使う）",
+  "author": {
+    "name": "Amane Katagiri"
+  },
+  "homepage": "https://github.com/vividoyomogimochi/kumimasu",
+  "repository": "https://github.com/vividoyomogimochi/kumimasu",
+  "license": "MIT",
+  "keywords": ["writing", "article", "interview", "japanese"]
+}
