@@ -10,7 +10,9 @@
   --bg: #f7f5f0; --paper: #fffdf9; --ink: #23262b; --muted: #6f747c; --line: #e3ded4; --soft: #efebe3;
   --accent: #2f6f8f; --bad: #b42318; --code-bg: #f1eee7;
   --yes: #9aa0a8; --partial: #c48a1c; --no: #2e7d4f; --answer: #2f6f8f;
-  --deep: #2e7d4f; --mention: #6f747c; --drop: #b42318;
+  --deep: #2e7d4f; --mention: #6f747c; --drop: #b42318; --ok: #2b8a3e;
+  --k-meta: #d9822b; --k-glue: #8e5bd0; --k-lint: #7a8088; --k-drop: #c0392b; --k-fabrication: #a5281b;
+  --k-number: #2f6f8f; --k-link: #2f6f8f; --k-user: #2e7d4f;
   --sans: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
   --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Menlo", "Consolas", "Noto Sans Mono CJK JP", monospace;
   color-scheme: light dark;
@@ -20,7 +22,9 @@
     --bg: #15171a; --paper: #1b1e22; --ink: #e4e2dd; --muted: #9a9fa6; --line: #2e3238; --soft: #24282d;
     --accent: #7cb7d4; --bad: #f08a80; --code-bg: #22262b;
     --yes: #6b7179; --partial: #e0b050; --no: #6cc28f; --answer: #7cb7d4;
-    --deep: #6cc28f; --mention: #9a9fa6; --drop: #f08a80;
+    --deep: #6cc28f; --mention: #9a9fa6; --drop: #f08a80; --ok: #6cc28f;
+    --k-meta: #f0a860; --k-glue: #b896f0; --k-lint: #a3a9b1; --k-drop: #f0857a; --k-fabrication: #f07a6e;
+    --k-number: #7cb7d4; --k-link: #7cb7d4; --k-user: #6cc28f;
   }
 }
 * { box-sizing: border-box; }
@@ -110,7 +114,7 @@ mark.fc { background: color-mix(in srgb, var(--c) 26%, transparent); color: inhe
 mark.fc.keep { background: transparent; border-bottom-style: dotted; }
 mark.fc.delete { text-decoration: line-through; text-decoration-color: var(--bad); opacity: .65; }
 mark.fc.rewrite { border-bottom-style: dashed; }
-mark.chg { background: color-mix(in srgb, var(--ok, #2b8a3e) 22%, transparent); border-bottom: 2px solid var(--ok, #2b8a3e); border-radius: 2px; color: inherit; cursor: help; }
+mark.chg { background: color-mix(in srgb, var(--ok) 22%, transparent); border-bottom: 2px solid var(--ok); border-radius: 2px; color: inherit; cursor: help; }
 .chg-del { display: inline-block; font-size: 11px; line-height: 1; padding: 1px 4px; margin: 0 2px; border-radius: 4px; color: var(--bad); border: 1px solid var(--bad); cursor: help; vertical-align: middle; }
 mark.fc.focus { outline: 2px solid var(--c); outline-offset: 1px; }
 .fc-side { position: sticky; top: 12px; align-self: start; max-height: calc(100vh - 24px); overflow: auto; }
@@ -144,11 +148,14 @@ mark.fc.focus { outline: 2px solid var(--c); outline-offset: 1px; }
 .fc-diff .head h2 { margin: 0 0 4px; font-size: 15px; }
 .fc-diff .body { padding: 10px 16px 16px; overflow: auto; }
 .fc-diff pre { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-.fc-diff .add { background: color-mix(in srgb, var(--ok, #2e7d4f) 18%, transparent); display: block; }
+.fc-diff .add { background: color-mix(in srgb, var(--ok) 18%, transparent); display: block; }
 .fc-diff .del { background: color-mix(in srgb, var(--bad) 18%, transparent); display: block; text-decoration: line-through; }
 .fc-diff .same { color: var(--muted); display: block; }
-@media (max-width: 900px) { .fc-grid { grid-template-columns: 1fr; padding: 12px 16px; } .fc-side { position: static; max-height: none; } .fc-article { padding: 18px; } .fc-bar { padding: 10px 16px; } }
 @media (max-width: 900px) {
+  .fc-grid { grid-template-columns: 1fr; padding: 12px 16px; }
+  .fc-side { position: static; max-height: none; }
+  .fc-article { padding: 18px; }
+  .fc-bar { padding: 10px 16px; }
   .layout { grid-template-columns: 1fr; padding: 12px 16px 60px; }
   .side { position: static; max-height: none; }
   .unit { grid-template-columns: 4px minmax(0, 1fr); }
@@ -206,19 +213,21 @@ mark.fc.focus { outline: 2px solid var(--c); outline-offset: 1px; }
 </div>
 <div id="status">読み込み中</div>
 <script>
-const S = { data: null, filter: "all", timers: {}, version: "", viewing: null, lastInput: 0 };
-const LABEL = { yes: "検索で届く", partial: "一部は検索で届く", no: "手元だけ", null: "未判定" };
+const S = { data: null, filter: "all", timers: {}, version: "", viewing: null, lastInput: 0, unitsKey: "" };
+const FC = { draft: null, html: "", items: [], removed: [], table: [], timer: null, finals: {}, final: null,
+  viewing: false, dirty: false, lastApply: null };
 const COLOR = { yes: "var(--yes)", partial: "var(--partial)", no: "var(--no)", null: "var(--line)" };
-const USE_LABEL = { deep: "掘り下げる", mention: "触れる", drop: "書かない" };
 const FILTERS = { all: "すべて", firsthand: "手元だけ・回答", searchable: "検索で届く", deep: "掘り下げる", drop: "書かない" };
+const TOKEN = document.querySelector('meta[name="kumimasu-token"]').content;
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const linkify = (s) => esc(s).replace(/https?:\/\/[^\s)<>\]」』]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
+const L = () => S.data.labels;
+const kindName = (k) => L().kind[k] || k;
+const kindColor = (k) => (k in L().kind ? `var(--k-${k})` : "var(--k-lint)");
 
 function status(msg, err) { const n = $("#status"); n.textContent = msg; n.className = err ? "err" : ""; }
-
-const TOKEN = document.querySelector('meta[name="kumimasu-token"]').content;
 
 function request(path, opts = {}) {
   const headers = { "X-Kumimasu-Token": TOKEN, ...(opts.headers || {}) };
@@ -233,10 +242,11 @@ async function api(path, opts) {
   return j;
 }
 
+const draftPath = (kind) => `/api/${kind}/${encodeURIComponent(FC.draft)}`;
+
 function useOf(id) {
   const d = S.data.design;
-  if (!d) return null;
-  const u = d.units.find((x) => x.id === id);
+  const u = d && d.units.find((x) => x.id === id);
   return u ? u.use : null;
 }
 
@@ -251,22 +261,24 @@ function visible(u) {
 }
 
 function renderUnits() {
+  const d = S.data.design;
+  S.unitsKey = JSON.stringify([S.filter, S.data.units, d && [d.units, d.skip, d.aside]]);
   const f = $("#filters");
   f.innerHTML = Object.entries(FILTERS).map(([k, v]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${v}</button>`).join("");
   f.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { S.filter = b.dataset.f; renderUnits(); }));
   const box = $("#units");
   box.innerHTML = "";
+  const uses = L().use;
   for (const u of S.data.units.filter(visible)) {
     const use = useOf(u.id);
     const color = u.origin === "answer" ? "var(--answer)" : COLOR[u.searchable];
-    const tag = u.origin === "answer" ? "回答" : LABEL[u.searchable];
+    const tag = u.origin === "answer" ? "回答" : L().searchable[u.searchable];
     const where = [u.source, u.section].filter(Boolean).join(" / ");
     const body = u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`;
-    const d = S.data.design;
     const isSkip = d && d.skip.some((x) => x.units.includes(u.id));
     const isAside = d && d.aside.some((x) => x.id === u.id);
-    const seg = use ? `<div class="tools"><div class="seg">${["deep", "mention", "drop"].map((x) =>
-      `<button data-use="${x}" class="${x === use ? "on" : ""}" title="${USE_LABEL[x]}">${USE_LABEL[x]}</button>`).join("")}</div>
+    const seg = use ? `<div class="tools"><div class="seg">${Object.keys(uses).map((x) =>
+      `<button data-use="${x}" class="${x === use ? "on" : ""}" title="${uses[x]}">${uses[x]}</button>`).join("")}</div>
       <div class="seg"><button data-noise="skip" class="${isSkip ? "on" : ""}" title="説明しない前提にする（書かない）">前提扱い</button>` +
       `<button data-noise="aside" class="${isAside ? "on" : ""}" title="脱線として入れる">脱線</button></div></div>` : "";
     const row = document.createElement("div");
@@ -274,9 +286,11 @@ function renderUnits() {
     const same = u.members && u.members.length ? ` · 同じ内容: ${u.members.map(esc).join(", ")}` : "";
     const ctx = u.context ? `<div class="why">問い: ${esc(u.context)}</div>` : "";
     row.innerHTML = `<div class="bar" style="--c: ${color}"></div><div><div class="head">${esc(u.id)} · ${esc(tag)}${where ? " · " + esc(where) : ""}${same}</div>${ctx}${body}</div>${seg}`;
-    row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => setUse(u.id, b.dataset.use)));
-    row.querySelector("button[data-noise=skip]")?.addEventListener("click", () => toggleSkip(u));
-    row.querySelector("button[data-noise=aside]")?.addEventListener("click", () => toggleAside(u));
+    row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => save("/api/design", { units: { [u.id]: b.dataset.use } }, true)));
+    row.querySelector("button[data-noise=skip]")?.addEventListener("click", () =>
+      save("/api/design", { toggle_skip: { unit: u.id, on: !isSkip } }, true));
+    row.querySelector("button[data-noise=aside]")?.addEventListener("click", () =>
+      save("/api/design", { toggle_aside: { unit: u.id, on: !isAside } }, true));
     box.appendChild(row);
   }
   if (!box.children.length) box.innerHTML = `<p class="note">該当する単位はありません。</p>`;
@@ -296,12 +310,18 @@ function renderInterview() {
   }));
 }
 
+function renderCounts() {
+  const box = $("#counts");
+  if (!box) return;
+  const n = Object.fromEntries(Object.keys(L().use).map((k) => [k, 0]));
+  S.data.design.units.forEach((u) => n[u.use]++);
+  box.textContent = Object.entries(L().use).map(([k, v]) => `${v} ${n[k]}`).join(" · ");
+}
+
 function renderDesign() {
   const box = $("#design");
   const d = S.data.design;
   if (!d) { box.innerHTML = `<h2>設計</h2><p class="note">まだ設計がありません。インタビューに答えてから <code>kumimasu design DIR</code> を実行してください。</p>`; return; }
-  const n = { deep: 0, mention: 0, drop: 0 };
-  d.units.forEach((u) => n[u.use]++);
   box.innerHTML = `<h2>設計</h2>
     <label>ねらい</label><textarea id="purpose">${esc(d.purpose)}</textarea>
     <label>読者が持ち帰るもの（1 行に 1 つ、最大 3 つ）</label><textarea id="takeaways">${esc(d.takeaways.join("\n"))}</textarea>
@@ -310,8 +330,8 @@ function renderDesign() {
     <label>ウェブで調べること（1 行に 1 つ、最大 5 つ。調査役には、この一覧と題・読者・ねらい・持ち帰りだけが渡る）</label><textarea id="research">${esc(d.research.join("\n"))}</textarea>
     <label>形（1 行に 1 つ。内容が並び・手順・比較・コードのときに使う形）</label><textarea id="forms">${esc(d.forms.join("\n"))}</textarea>
     <label>形の好み（設計と下書きの依頼にそのまま載る）</label><textarea id="form_prefs">${esc(d.form_prefs)}</textarea>
-    <label>目標の字数</label><input type="number" id="target_length" min="500" step="100" value="${d.target_length}">
-    <div class="counts">掘り下げる ${n.deep} · 触れる ${n.mention} · 書かない ${n.drop}</div>
+    <label>目標の字数</label><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}">
+    <div class="counts" id="counts"></div>
     <label>説明しない前提（skip。読者は知っているか、自分で調べる。1–3 個）</label>
     <div id="skips">${d.skip.map((x, i) => `<div class="noise"><input data-skip="${i}" value="${esc(x.label)}"><span class="refs">${x.units.map(esc).join(", ")}</span></div>`).join("") || `<p class="note">なし。材料の「前提扱い」で足せます。</p>`}</div>
     <label>脱線（aside。著者が出くわした場面に入れる。1–2 個）</label>
@@ -325,18 +345,17 @@ function renderDesign() {
     research: lines("#research").slice(0, 5), forms: lines("#forms"), form_prefs: $("#form_prefs").value,
     target_length: parseInt($("#target_length").value, 10) || d.target_length,
   }, false));
+  renderCounts();
   renderWarnings();
   renderRules();
   ["#purpose", "#takeaways", "#order", "#avoid", "#research", "#forms", "#form_prefs", "#target_length"].forEach((id) => $(id).addEventListener("input", push));
   box.querySelectorAll("input[data-skip]").forEach((el) => el.addEventListener("input", () => {
-    const skip = d.skip.map((x, i) => ({ ...x, label: i === +el.dataset.skip ? el.value : x.label }));
-    d.skip = skip;
-    debounce("skip", () => save("/api/design", { skip }, false));
+    d.skip[+el.dataset.skip].label = el.value;
+    debounce("skip", () => save("/api/design", { skip: d.skip }, false));
   }));
   box.querySelectorAll("input[data-aside]").forEach((el) => el.addEventListener("input", () => {
-    const aside = d.aside.map((x, i) => ({ ...x, where: i === +el.dataset.aside ? el.value : x.where }));
-    d.aside = aside;
-    debounce("aside", () => save("/api/design", { aside }, false));
+    d.aside[+el.dataset.aside].where = el.value;
+    debounce("aside", () => save("/api/design", { aside: d.aside }, false));
   }));
 }
 
@@ -345,8 +364,8 @@ function renderRules() {
   if (!box) return;
   const d = S.data.design;
   const push = (now) => {
-    const rules = d.rules.map((r) => ({ text: r.text, on: r.on }));
-    if (now) save("/api/design", { rules }, false); else debounce("rules", () => save("/api/design", { rules }, false));
+    const send = () => save("/api/design", { rules: d.rules.map((r) => ({ text: r.text, on: r.on })) }, false);
+    if (now) send(); else debounce("rules", send);
   };
   box.innerHTML = d.rules.map((r, i) => `<div class="rule${r.on ? "" : " off"}">
       <input type="checkbox" data-i="${i}" ${r.on ? "checked" : ""} title="オン・オフ">
@@ -377,28 +396,9 @@ function renderRules() {
 function renderWarnings() {
   const box = $("#warnings");
   if (!box) return;
-  const w = S.data.warnings || [];
+  const w = S.data.warnings;
   box.innerHTML = w.length ? `<label>使う材料から出てしまう「書かない」単位（判断は著者に任せる。use を変えたら <code>kumimasu review DIR</code> で計算し直す）</label>` +
     `<ul class="warn">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
-}
-
-function toggleSkip(u) {
-  const d = S.data.design;
-  const on = d.skip.some((x) => x.units.includes(u.id));
-  const skip = on ? d.skip.filter((x) => !(x.units.length === 1 && x.units[0] === u.id)).map((x) => ({ ...x, units: x.units.filter((i) => i !== u.id) }))
-    : [...d.skip, { label: u.text.replace(/\s+/g, " ").slice(0, 20), units: [u.id], why: "手で追加" }];
-  save("/api/design", { skip }, true);
-}
-
-function toggleAside(u) {
-  const d = S.data.design;
-  const on = d.aside.some((x) => x.id === u.id);
-  const aside = on ? d.aside.filter((x) => x.id !== u.id) : [...d.aside, { id: u.id, where: "", why: "手で追加" }];
-  save("/api/design", { aside }, true);
-}
-
-function setUse(id, use) {
-  save("/api/design", { units: { [id]: use } }, true);
 }
 
 function debounce(key, fn) {
@@ -407,15 +407,29 @@ function debounce(key, fn) {
   S.timers[key] = setTimeout(() => { delete S.timers[key]; fn(); }, 600);
 }
 
+function unitsChanged() {
+  const d = S.data.design;
+  return JSON.stringify([S.filter, S.data.units, d && [d.units, d.skip, d.aside]]) !== S.unitsKey;
+}
+
 async function save(path, body, rerender) {
   status("保存中…");
   try {
     S.data = await api(path, { method: "PUT", body });
     S.version = S.data.version;
     status("保存しました");
-    if (rerender) { renderUnits(); renderDesign(); }
-    else { renderUnits(); renderWarnings(); }
+    if (rerender) { renderUnits(); renderDesign(); return; }
+    if (unitsChanged()) renderUnits();
+    if (S.data.design) { renderCounts(); renderWarnings(); }
   } catch (e) { status("保存できません: " + e.message, true); }
+}
+
+function renderAll() {
+  const p = S.data.project;
+  $("#topic").textContent = p.topic;
+  document.title = "記事を書く: " + p.topic;
+  $("#meta").textContent = `読者: ${p.audience} · 種類: ${p.kind} · 目標 ${p.length} 字 · 単位 ${S.data.units.length}`;
+  renderUnits(); renderInterview(); renderDesign();
 }
 
 async function boot() {
@@ -423,22 +437,11 @@ async function boot() {
     S.data = await api("/api/state");
   } catch (e) { status("読み込めません: " + e.message, true); return; }
   S.version = S.data.version;
-  const p = S.data.project;
-  $("#topic").textContent = p.topic;
-  document.title = "記事を書く: " + p.topic;
-  renderMeta();
-  renderUnits(); renderInterview(); renderDesign();
+  renderAll();
   showScreen(S.data.stage.stage);
   status("読み込みました");
-  setTimeout(poll, (S.data && S.data.poll_seconds || 3) * 1000);
+  setTimeout(poll, S.data.poll_seconds * 1000);
 }
-
-function renderMeta() {
-  const p = S.data.project;
-  $("#meta").textContent = `読者: ${p.audience} · 種類: ${p.kind} · 目標 ${p.length} 字 · 単位 ${S.data.units.length}`;
-}
-
-const HUMAN = ["interview", "design", "review"];
 
 function renderStages() {
   const st = S.data.stage;
@@ -452,7 +455,7 @@ function renderStages() {
 function showScreen(s) {
   S.viewing = s;
   const st = S.data.stage;
-  const editable = s === st.stage && HUMAN.includes(s);
+  const editable = s === st.stage && L().human_stages.includes(s);
   const screen = s === "interview" || s === "design" ? "design" : s === "drafting" ? "drafting" : "final";
   $("#view-design").hidden = screen !== "design";
   $("#view-drafting").hidden = screen !== "drafting";
@@ -473,7 +476,7 @@ function showScreen(s) {
     banner.hidden = false;
     banner.textContent = `読み取り専用（今の段階: ${st.labels[st.stage]}）`;
   } else banner.hidden = true;
-  if (screen === "drafting") $("#drafting-note").innerHTML = last && last.note ? `<p>エージェントへの指示: ${esc(last.note)}</p>` : "";
+  if (screen === "drafting") $("#drafting-note").innerHTML = last && last.note ? `<p>エージェントへの指示（本人が書いたもの）: ${esc(last.note)}</p>` : "";
   $("#confirm-bar").hidden = !editable;
   renderStages();
   if (screen === "final") openFinal().catch((e) => status("読み込めません: " + e.message, true));
@@ -491,16 +494,17 @@ async function poll() {
       if (v.version !== S.version && !busy()) await reload();
     }
   } catch (e) { /* the server may be restarting; try again on the next tick */ }
-  setTimeout(poll, (S.data && S.data.poll_seconds || 3) * 1000);
+  setTimeout(poll, S.data.poll_seconds * 1000);
 }
 
 async function reload() {
   const prev = S.data.stage.stage;
   S.data = await api("/api/state");
   S.version = S.data.version;
-  renderMeta(); renderUnits(); renderInterview(); renderDesign();
-  showScreen(S.data.stage.stage !== prev ? S.data.stage.stage : S.viewing);
-  status(S.data.stage.stage !== prev ? `段階が「${S.data.stage.labels[S.data.stage.stage]}」になりました` : "更新しました");
+  renderAll();
+  const now = S.data.stage.stage;
+  showScreen(now !== prev ? now : S.viewing);
+  status(now !== prev ? `段階が「${S.data.stage.labels[now]}」になりました` : "更新しました");
 }
 
 async function confirmStage() {
@@ -510,23 +514,83 @@ async function confirmStage() {
     const r = await api("/api/confirm", { method: "POST", body: { note: $("#confirm-note").value } });
     $("#confirm-note").value = "";
     S.data = r; S.version = r.version;
-    renderMeta(); renderUnits(); renderInterview(); renderDesign();
+    renderAll();
     showScreen(r.stage.stage);
     status(`確定しました。エージェントに渡しました（次: ${r.stage.labels[r.stage.stage]}）`);
   } catch (e) { status("確定できません: " + e.message, true); }
 }
 
-const FC = { draft: null, html: "", items: [], spans: [], timer: null };
-const KIND = {
-  meta: ["メタ言説", "#d9822b"], glue: ["つなぎの効用文", "#8e5bd0"], lint: ["表記", "#7a8088"],
-  drop: ["書かないはずの事柄", "#c0392b"], fabrication: ["材料に無い体験", "#a5281b"],
-  number: ["出典の無い数値", "#2f6f8f"], link: ["開けないリンク", "#2f6f8f"], user: ["自分で足した項目", "#2e7d4f"],
-};
-const DECISION = { "": "未決", keep: "残す", delete: "削る", rewrite: "書き直す" };
-const cpLen = (t) => [...t].length;
-const u16 = (t, cp) => [...t].slice(0, cp).join("").length;
+function cpLen(text) {
+  let n = 0;
+  for (let i = 0; i < text.length; i += text.codePointAt(i) > 0xffff ? 2 : 1) n++;
+  return n;
+}
 
-function fcColor(it) { return (KIND[it.kind] || ["", "#7a8088"])[1]; }
+function u16(text, cp) {
+  let i = 0;
+  for (; cp > 0 && i < text.length; cp--) i += text.codePointAt(i) > 0xffff ? 2 : 1;
+  return i;
+}
+
+function spanTable(root) {
+  const table = [];
+  for (const sp of root.querySelectorAll("span[data-s]")) {
+    let at = +sp.dataset.s;
+    const walker = document.createTreeWalker(sp, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const n = cpLen(walker.currentNode.data);
+      table.push({ node: walker.currentNode, start: at, len: n });
+      at += n;
+    }
+  }
+  return table.sort((a, b) => a.start - b.start);
+}
+
+function firstAfter(table, pos) {
+  let lo = 0, hi = table.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (table[mid].start + table[mid].len <= pos) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function wrapRange(table, a, b, make) {
+  let k = firstAfter(table, a);
+  while (k < table.length && table[k].start < b) {
+    const e = table[k];
+    const x = Math.max(a, e.start) - e.start, y = Math.min(b, e.start + e.len) - e.start;
+    if (x >= y || (make.skip && make.skip(e.node))) { k++; continue; }
+    const parts = [];
+    let mid = e.node;
+    if (x > 0) { parts.push({ node: mid, start: e.start, len: x }); mid = mid.splitText(u16(mid.data, x)); }
+    if (y < e.len) mid.splitText(u16(mid.data, y - x));
+    const right = y < e.len ? mid.nextSibling : null;
+    const w = make();
+    mid.parentNode.insertBefore(w, mid);
+    w.appendChild(mid);
+    parts.push({ node: mid, start: e.start + x, len: y - x });
+    if (right) parts.push({ node: right, start: e.start + y, len: e.len - y });
+    table.splice(k, 1, ...parts);
+    k += parts.length;
+  }
+}
+
+function insertAt(table, pos, el) {
+  const k = Math.min(firstAfter(table, pos), table.length - 1);
+  if (k < 0) return;
+  const e = table[k];
+  const x = Math.max(0, Math.min(e.len, pos - e.start));
+  const rest = x < e.len ? e.node.splitText(u16(e.node.data, x)) : null;
+  e.node.parentNode.insertBefore(el, rest || e.node.nextSibling);
+  if (rest) table.splice(k, 1, { node: e.node, start: e.start, len: x }, { node: rest, start: pos, len: e.len - x });
+}
+
+function offsetOf(node, off) {
+  if (node.nodeType !== 3) return null;
+  const e = FC.table.find((x) => x.node === node);
+  return e ? e.start + cpLen(node.data.slice(0, off)) : null;
+}
 
 async function openFinal() {
   const r = await api("/api/drafts");
@@ -535,19 +599,20 @@ async function openFinal() {
   const sel = $("#fc-draft");
   sel.innerHTML = drafts.map((d) => `<option value="${esc(d)}">${esc(d)}${FC.finals[d] ? "（反映済み）" : ""}</option>`).join("");
   if (!drafts.length) { $("#fc-article").innerHTML = `<p class="note">draft*.md がありません。</p>`; return; }
-  const want = S.data && S.data.stage ? S.data.stage.draft : null;
+  const want = S.data.stage.draft;
   FC.draft = drafts.includes(FC.draft) ? FC.draft : drafts.includes(want) ? want : drafts[0];
   sel.value = FC.draft;
-  $("#fc-legend").innerHTML = Object.values(KIND).map(([n, c]) => `<span><i class="sw" style="--c:${c}"></i>${n}</span>`).join("");
+  $("#fc-legend").innerHTML = Object.keys(L().kind).map((k) => `<span><i class="sw" style="--c:${kindColor(k)}"></i>${esc(kindName(k))}</span>`).join("");
   await loadDraft(FC.draft);
 }
 
 async function loadDraft(name) {
   FC.draft = name;
   FC.viewing = false;
-  const r = await api(`/api/review/${encodeURIComponent(name)}`);
-  FC.html = r.html; FC.items = r.items;
-  renderUsed(r.used); FC.dirty = r.dirty;
+  FC.final = null;
+  const r = await api(draftPath("review"));
+  FC.html = r.html; FC.items = r.items; FC.dirty = r.dirty;
+  renderUsed(r.used);
   if ($("#fc-diff").open) $("#fc-diff").close();
   paintFinal();
   renderResult();
@@ -565,21 +630,20 @@ function renderUsed(u) {
   const box = $("#fc-used");
   box.hidden = !u;
   if (!u) return;
-  const list = (xs) => xs && xs.length ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<p class=\"note\">なし</p>";
-  const reg = { keitai: "敬体（です・ます）", joutai: "常体（だ・である）" }[u.register] || u.register;
-  $("#fc-used-body").innerHTML = `<p>文体: ${esc(reg)} · 書かない事柄の載せ方: ${esc(u.drop_list)} · 設計: ${esc(u.design || "")}</p>
-    <p>LLM: ${Object.entries(u.providers || {}).map(([k, v]) => `${esc(k)}=${esc(v)}`).join(" · ")}</p>
+  const list = (xs) => xs.length ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<p class=\"note\">なし</p>";
+  $("#fc-used-body").innerHTML = `<p>文体: ${esc(L().register[u.register] || u.register)} · 書かない事柄の載せ方: ${esc(u.drop_list)} · 設計: ${esc(u.design)}</p>
+    <p>LLM: ${Object.entries(u.providers).map(([k, v]) => `${esc(k)}=${esc(v)}`).join(" · ")}</p>
     <h4>書き方のルール（オン）</h4>${list(u.rules)}
-    ${u.rules_off && u.rules_off.length ? `<h4>オフにしたルール</h4>${list(u.rules_off)}` : ""}
+    ${u.rules_off.length ? `<h4>オフにしたルール</h4>${list(u.rules_off)}` : ""}
     <h4>書かない話題</h4>${list(u.avoid)}
     <h4>形</h4>${list(u.forms)}${u.form_prefs ? `<p>好み: ${esc(u.form_prefs)}</p>` : ""}
-    ${u.skip && u.skip.length ? `<h4>説明しない前提</h4>${list(u.skip)}` : ""}
-    ${u.aside && u.aside.length ? `<h4>脱線</h4>${list(u.aside)}` : ""}`;
+    ${u.skip.length ? `<h4>説明しない前提</h4>${list(u.skip)}` : ""}
+    ${u.aside.length ? `<h4>脱線</h4>${list(u.aside)}` : ""}`;
 }
 
 function renderResult() {
   const box = $("#fc-result");
-  const out = FC.finals && FC.finals[FC.draft];
+  const out = FC.finals[FC.draft];
   if (!out) { box.hidden = true; return; }
   box.hidden = false;
   box.innerHTML = `<span>結果: <b>${esc(out)}</b>（読み取り専用。直すときは ${esc(FC.draft)} の決定を変えて反映し直す）</span>
@@ -588,28 +652,48 @@ function renderResult() {
     <button id="fc-copy">コピー</button>
     <button id="fc-download">ダウンロード</button>
     <textarea id="fc-copybox" readonly hidden></textarea>`;
-  $("#fc-view").addEventListener("click", toggleResult);
+  $("#fc-view").addEventListener("click", () => toggleResult().catch((e) => status("読み込めません: " + e.message, true)));
   $("#fc-copy").addEventListener("click", copyResult);
   $("#fc-download").addEventListener("click", downloadResult);
   if (FC.lastApply) $("#fc-diffbtn").addEventListener("click", showDiff);
 }
 
+async function finalText() {
+  if (!FC.final || FC.final.draft !== FC.draft) FC.final = await api(draftPath("final"));
+  return FC.final;
+}
+
 async function toggleResult() {
   if (FC.viewing) { FC.viewing = false; paintFinal(); renderResult(); setApplyEnabled(); return; }
-  const r = await api(`/api/final/${encodeURIComponent(FC.draft)}`);
+  const r = await finalText();
   FC.viewing = true;
-  const ch = r.changes || [];
-  const nr = ch.filter((c) => c.kind === "rewritten").length, nd = ch.filter((c) => c.kind === "deleted").length;
-  $("#fc-article").innerHTML = `<p class="note">${esc(r.final)}（読み取り専用）· <mark class="chg">書き直した所</mark> ${nr} · <span class="chg-del">削除</span> ${nd}（印にマウスを載せると元の文）</p>` + r.html;
-  markChanges(ch);
+  const nr = r.changes.filter((c) => c.kind === "rewritten").length, nd = r.changes.filter((c) => c.kind === "deleted").length;
+  const art = $("#fc-article");
+  art.innerHTML = `<p class="note">${esc(r.final)}（読み取り専用）· <mark class="chg">書き直した所</mark> ${nr} · <span class="chg-del">削除</span> ${nd}（印にマウスを載せると元の文）</p>` + r.html;
+  markChanges(spanTable(art), r.changes);
   $("#fc-items").innerHTML = `<p class="note">反映の結果を表示しています。決定は元の下書きで変えます。</p>`;
   setApplyEnabled();
   renderResult();
 }
 
+function markChanges(table, changes) {
+  for (const c of changes.filter((x) => x.kind === "deleted")) {
+    const m = document.createElement("span");
+    m.className = "chg-del"; m.textContent = "削除"; m.title = "削除した文: " + c.before;
+    insertAt(table, c.start, m);
+  }
+  for (const c of changes.filter((x) => x.kind === "rewritten")) {
+    wrapRange(table, c.start, c.end, () => {
+      const w = document.createElement("mark");
+      w.className = "chg"; w.title = "元の文: " + c.before;
+      return w;
+    });
+  }
+}
+
 async function downloadResult() {
   try {
-    const r = await request(`/api/download/${encodeURIComponent(FC.draft)}`);
+    const r = await request(draftPath("download"));
     if (!r.ok) throw new Error((await r.json()).error || r.statusText);
     const m = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get("Content-Disposition") || "");
     const a = document.createElement("a");
@@ -621,7 +705,8 @@ async function downloadResult() {
 }
 
 async function copyResult() {
-  const r = await api(`/api/final/${encodeURIComponent(FC.draft)}`);
+  let r;
+  try { r = await finalText(); } catch (e) { status("読み込めません: " + e.message, true); return; }
   try {
     await navigator.clipboard.writeText(r.markdown);
     status("コピーしました: " + r.final);
@@ -632,86 +717,22 @@ async function copyResult() {
   }
 }
 
-
 function paintFinal() {
   const art = $("#fc-article");
   art.innerHTML = FC.html;
-  FC.spans = Array.from(art.querySelectorAll("span[data-s]"));
+  FC.table = spanTable(art);
   const placed = FC.items.filter((i) => i.start !== null && i.end !== null).sort((a, b) => (b.end - b.start) - (a.end - a.start));
-  for (const it of placed) wrapItem(it);
-  renderItems();
-}
-
-function wrapItem(it) {
-  for (const sp of FC.spans) {
-    const s = +sp.dataset.s;
-    if (s >= it.end || s + cpLen(sp.textContent) <= it.start) continue;
-    const walker = document.createTreeWalker(sp, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    while (walker.nextNode()) nodes.push(walker.currentNode);
-    let off = s;
-    for (const tn of nodes) {
-      const n = cpLen(tn.data), a = Math.max(it.start, off), b = Math.min(it.end, off + n);
-      off += n;
-      if (a >= b) continue;
-      const ua = u16(tn.data, a - (off - n)), ub = u16(tn.data, b - (off - n));
-      const mid = ua > 0 ? tn.splitText(ua) : tn;
-      if (ub - ua < mid.data.length) mid.splitText(ub - ua);
+  for (const it of placed) {
+    wrapRange(FC.table, it.start, it.end, () => {
       const w = document.createElement("mark");
       w.className = "fc " + (it.decision || "");
-      w.dataset.item = it.id; w.style.setProperty("--c", fcColor(it));
-      mid.parentNode.insertBefore(w, mid); w.appendChild(mid);
+      w.dataset.item = it.id;
+      w.style.setProperty("--c", kindColor(it.kind));
       w.addEventListener("click", (e) => { e.stopPropagation(); itemPop(it.id, w.getBoundingClientRect()); });
-    }
+      return w;
+    });
   }
-}
-
-function markChanges(changes) {
-  const spans = Array.from($("#fc-article").querySelectorAll("span[data-s]"));
-  const textAt = (pos, after) => {
-    for (const sp of spans) {
-      const s = +sp.dataset.s;
-      const walker = document.createTreeWalker(sp, NodeFilter.SHOW_TEXT);
-      let off = s;
-      while (walker.nextNode()) {
-        const tn = walker.currentNode, n = cpLen(tn.data);
-        if (pos > off && pos < off + n || pos === off && after || pos === off + n && !after) return [tn, u16(tn.data, pos - off)];
-        off += n;
-      }
-    }
-    return null;
-  };
-  for (const c of changes.filter((x) => x.kind === "deleted")) {
-    const hit = textAt(c.start, false) || textAt(c.start, true);
-    if (!hit) continue;
-    const [tn, i] = hit;
-    const rest = i < tn.data.length ? tn.splitText(i) : null;
-    const m = document.createElement("span");
-    m.className = "chg-del"; m.textContent = "削除"; m.title = "削除した文: " + c.before;
-    tn.parentNode.insertBefore(m, rest || tn.nextSibling);
-  }
-  for (const c of changes.filter((x) => x.kind === "rewritten")) {
-    for (const sp of Array.from($("#fc-article").querySelectorAll("span[data-s]"))) {
-      const s = +sp.dataset.s;
-      if (s >= c.end || s + cpLen(sp.textContent) <= c.start) continue;
-      const walker = document.createTreeWalker(sp, NodeFilter.SHOW_TEXT);
-      const nodes = [];
-      while (walker.nextNode()) nodes.push(walker.currentNode);
-      let off = s;
-      for (const tn of nodes) {
-        if (tn.parentNode.classList && tn.parentNode.classList.contains("chg-del")) continue;
-        const n = cpLen(tn.data), a = Math.max(c.start, off), b = Math.min(c.end, off + n);
-        off += n;
-        if (a >= b) continue;
-        const ua = u16(tn.data, a - (off - n)), ub = u16(tn.data, b - (off - n));
-        const mid = ua > 0 ? tn.splitText(ua) : tn;
-        if (ub - ua < mid.data.length) mid.splitText(ub - ua);
-        const w = document.createElement("mark");
-        w.className = "chg"; w.title = "元の文: " + c.before;
-        mid.parentNode.insertBefore(w, mid); w.appendChild(mid);
-      }
-    }
-  }
+  renderItems();
 }
 
 function rewriteBadge(it) {
@@ -721,17 +742,21 @@ function rewriteBadge(it) {
   return ` <span class="badge">固定${it.rewrite.source === "user" ? "・手で直した" : ""}</span>` + (it.note_changed ? ` <span class="badge bad">メモ変更</span>` : "");
 }
 
+function itemHead(it, votes) {
+  return `${esc(kindName(it.kind))}${it.category ? " · " + esc(it.category) : ""}${it.votes ? votes + esc(it.votes) : ""}`;
+}
+
 function renderItems() {
   const box = $("#fc-items");
   const decided = FC.items.filter((i) => i.decision).length;
   $("#fc-count").textContent = `${FC.items.length} 項目 · 決めた ${decided}`;
-  box.innerHTML = FC.items.map((it) => `<div class="fc-item${it.decision ? " done" : ""}" data-item="${esc(it.id)}" style="--c:${fcColor(it)}">
-      <div class="k">${esc(KIND[it.kind] ? KIND[it.kind][0] : it.kind)}${it.category ? " · " + esc(it.category) : ""}${it.votes ? " · " + esc(it.votes) : ""}${it.start === null ? " · 位置不明" : ""}</div>
+  box.innerHTML = FC.items.map((it) => `<div class="fc-item${it.decision ? " done" : ""}" data-item="${esc(it.id)}" style="--c:${kindColor(it.kind)}">
+      <div class="k">${itemHead(it, " · ")}${it.start === null ? " · 位置不明" : ""}</div>
       <div class="t">${esc(it.text.slice(0, 90))}${it.text.length > 90 ? "…" : ""}</div>
-      <div class="d">${DECISION[it.decision]}${it.note ? `：${esc(it.note)}` : ""}${rewriteBadge(it)}</div></div>`).join("") ||
+      <div class="d">${esc(L().decision[it.decision])}${it.note ? `：${esc(it.note)}` : ""}${rewriteBadge(it)}</div></div>`).join("") ||
     `<p class="note">検査で当たった箇所はありません。本文を選ぶと自分の項目を足せます。</p>`;
   box.querySelectorAll(".fc-item").forEach((el) => el.addEventListener("click", () => {
-    const m = document.querySelector(`mark.fc[data-item="${el.dataset.item}"]`);
+    const m = [...document.querySelectorAll("mark.fc")].find((x) => x.dataset.item === el.dataset.item);
     document.querySelectorAll("mark.fc.focus").forEach((x) => x.classList.remove("focus"));
     if (m) { m.scrollIntoView({ block: "center" }); m.classList.add("focus"); }
     itemPop(el.dataset.item, (m || el).getBoundingClientRect());
@@ -749,8 +774,8 @@ function placeFcPop(pop, rect) {
 }
 
 function decisionButtons(cur) {
-  return `<div class="acts">${["keep", "delete", "rewrite"].map((d) =>
-    `<button data-d="${d}" class="${cur === d ? "on" : ""}">${DECISION[d]}</button>`).join("")}</div>`;
+  return `<div class="acts">${Object.entries(L().decision).filter(([d]) => d).map(([d, label]) =>
+    `<button data-d="${d}" class="${cur === d ? "on" : ""}">${esc(label)}</button>`).join("")}</div>`;
 }
 
 function rewriteBlock(it) {
@@ -770,7 +795,7 @@ function itemPop(id, rect) {
   const it = cur();
   if (!it) return;
   const pop = $("#fc-pop");
-  pop.innerHTML = `<div class="k">${esc(KIND[it.kind] ? KIND[it.kind][0] : it.kind)}${it.category ? " · " + esc(it.category) : ""}${it.votes ? " · 票 " + esc(it.votes) : ""}</div>
+  pop.innerHTML = `<div class="k">${itemHead(it, " · 票 ")}</div>
     <div class="quote">「${esc(it.text)}」</div>
     ${it.reason ? `<div class="reason">${esc(it.reason)}</div>` : ""}
     ${it.unit ? `<div class="unit">材料 ${esc(it.unit.id)}: ${esc(it.unit.text)}</div>` : ""}
@@ -778,50 +803,40 @@ function itemPop(id, rect) {
     <textarea id="fc-note" placeholder="書き直すときのメモ（任意）">${esc(it.note)}</textarea>
     <div id="fc-rewrite">${rewriteBlock(it)}</div>
     ${it.kind === "user" ? `<div class="acts"><button id="fc-remove">この項目を消す</button></div>` : ""}`;
+  const refresh = () => { const n = cur(); if (n) { pop.querySelector("#fc-rewrite").innerHTML = rewriteBlock(n); bindRewrite(); } };
   const bindRewrite = () => {
-    const res = pop.querySelector("#fc-rewrite-text");
-    if (res) res.addEventListener("input", (e) => { const c = cur(); if (c && c.rewrite) { c.rewrite.result = e.target.value; c.rewrite.source = "user"; saveReview(false); } });
-    const regen = pop.querySelector("#fc-regen");
-    if (regen) regen.addEventListener("click", async () => {
+    pop.querySelector("#fc-rewrite-text")?.addEventListener("input", (e) => {
+      const c = cur(); if (c && c.rewrite) { c.rewrite.result = e.target.value; c.rewrite.source = "user"; saveReview(false); }
+    });
+    pop.querySelector("#fc-regen")?.addEventListener("click", async () => {
       const c = cur(); if (!c) return;
       c.regenerate = true;
       await saveReview(true);
-      const n = cur(); if (n) { pop.querySelector("#fc-rewrite").innerHTML = rewriteBlock(n); bindRewrite(); }
+      refresh();
     });
   };
+  const markDecision = (c) => pop.querySelectorAll("button[data-d]").forEach((x) => x.classList.toggle("on", x.dataset.d === c.decision));
   pop.querySelectorAll("button[data-d]").forEach((b) => b.addEventListener("click", async () => {
     const c = cur(); if (!c) return;
     c.decision = b.dataset.d;
-    pop.querySelectorAll("button[data-d]").forEach((x) => x.classList.toggle("on", x.dataset.d === c.decision));
+    markDecision(c);
     await saveReview(true);
-    const n = cur(); if (n) { pop.querySelector("#fc-rewrite").innerHTML = rewriteBlock(n); bindRewrite(); }
+    refresh();
   }));
   pop.querySelector("#fc-note").addEventListener("input", (e) => {
     const c = cur(); if (!c) return;
     c.note = e.target.value;
-    if (c.note && !c.decision) {
-      c.decision = "rewrite";
-      pop.querySelectorAll("button[data-d]").forEach((x) => x.classList.toggle("on", x.dataset.d === c.decision));
-    }
+    if (c.note && !c.decision) { c.decision = "rewrite"; markDecision(c); }
     saveReview(false);
   });
   bindRewrite();
-  const rm = pop.querySelector("#fc-remove");
-  if (rm) rm.addEventListener("click", () => { FC.items = FC.items.filter((x) => x.id !== id); (FC.removed ||= []).push(id); pop.hidden = true; saveReview(true); });
+  pop.querySelector("#fc-remove")?.addEventListener("click", () => {
+    FC.items = FC.items.filter((x) => x.id !== id);
+    FC.removed.push(id);
+    pop.hidden = true;
+    saveReview(true);
+  });
   placeFcPop(pop, rect);
-}
-
-function fcExact(node, off) {
-  if (node.nodeType !== 3) return null;
-  const sp = node.parentElement && node.parentElement.closest("span[data-s]");
-  if (!sp || !$("#fc-article").contains(sp)) return null;
-  let acc = +sp.dataset.s;
-  const walker = document.createTreeWalker(sp, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    if (walker.currentNode === node) return acc + cpLen(node.data.slice(0, off));
-    acc += cpLen(walker.currentNode.data);
-  }
-  return null;
 }
 
 function fcSelection() {
@@ -829,18 +844,16 @@ function fcSelection() {
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
   const r = sel.getRangeAt(0);
   if (!$("#fc-article").contains(r.commonAncestorContainer)) return null;
-  const a = fcExact(r.startContainer, r.startOffset), b = fcExact(r.endContainer, r.endOffset);
+  const a = offsetOf(r.startContainer, r.startOffset), b = offsetOf(r.endContainer, r.endOffset);
   return a !== null && b !== null && a < b ? { start: a, end: b, quote: sel.toString(), rect: r.getBoundingClientRect() } : null;
 }
 
 function newItemPop(t) {
   const pop = $("#fc-pop");
-  pop.innerHTML = `<div class="k">自分で足す項目</div><div class="quote">「${esc(t.quote.slice(0, 120))}」</div>
+  pop.innerHTML = `<div class="k">${esc(kindName("user"))}</div><div class="quote">「${esc(t.quote.slice(0, 120))}」</div>
     ${decisionButtons("")}<textarea id="fc-note" placeholder="書き直すときのメモ（任意）"></textarea>`;
   pop.querySelectorAll("button[data-d]").forEach((b) => b.addEventListener("click", () => {
-    const id = "user-" + Math.random().toString(36).slice(2, 10);
-    FC.items.push({ id, kind: "user", category: "", start: t.start, end: t.end, text: t.quote, votes: "", reason: "",
-      unit: null, decision: b.dataset.d, note: pop.querySelector("#fc-note").value });
+    FC.items.push({ kind: "user", start: t.start, end: t.end, text: t.quote, decision: b.dataset.d, note: pop.querySelector("#fc-note").value });
     window.getSelection().removeAllRanges();
     pop.hidden = true;
     saveReview(true);
@@ -859,12 +872,10 @@ function saveReview(now) {
 async function pushReview(repaint) {
   status("保存中…");
   try {
-    const body = { items: FC.items.map((i) => ({ id: i.id, decision: i.decision, note: i.note, start: i.start, end: i.end,
-      ...(i.rewrite ? { result: i.rewrite.result } : {}), ...(i.regenerate ? { regenerate: true } : {}) })), remove: FC.removed || [] };
-    const r = await api(`/api/review/${encodeURIComponent(FC.draft)}`, { method: "PUT", body });
-    FC.items = r.items; FC.dirty = r.dirty;
-    FC.removed = [];
-    S.version = r.version;
+    const items = FC.items.map((i) => ({ ...(i.id ? { id: i.id } : {}), decision: i.decision, note: i.note, start: i.start, end: i.end,
+      ...(i.rewrite ? { result: i.rewrite.result } : {}), ...(i.regenerate ? { regenerate: true } : {}) }));
+    const r = await api(draftPath("review"), { method: "PUT", body: { items, remove: FC.removed } });
+    FC.items = r.items; FC.dirty = r.dirty; FC.removed = []; S.version = r.version;
     setApplyEnabled();
     if (repaint) paintFinal(); else renderItems();
     status("保存しました");
@@ -875,18 +886,16 @@ async function applyFinal() {
   try {
     if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
     status("反映中…");
-    const a = await api(`/api/apply/${encodeURIComponent(FC.draft)}`, { method: "POST", body: {} });
-    const r = a.result;
+    const a = await api(draftPath("apply"), { method: "POST", body: {} });
     FC.items = a.review.items; FC.dirty = a.review.dirty; S.version = a.review.version;
-    paintFinal();
-    FC.lastApply = r;
-    FC.finals[FC.draft] = r.out;
+    FC.lastApply = a.result; FC.final = a.final;
+    FC.finals[FC.draft] = a.result.out;
     const opt = [...$("#fc-draft").options].find((o) => o.value === FC.draft);
     if (opt) opt.textContent = `${FC.draft}（反映済み）`;
     FC.viewing = false;
     await toggleResult();
     showDiff();
-    status("反映しました: " + r.out + "（結果を表示しています。決定を変えるときは「下書きに戻る」）");
+    status("反映しました: " + a.result.out + "（結果を表示しています。決定を変えるときは「下書きに戻る」）");
   } catch (e) { status("反映できません: " + e.message, true); }
 }
 
@@ -907,7 +916,7 @@ function showDiff() {
 
 $("#confirm-btn").addEventListener("click", confirmStage);
 document.addEventListener("input", () => { S.lastInput = Date.now(); });
-$("#fc-draft").addEventListener("change", (e) => loadDraft(e.target.value));
+$("#fc-draft").addEventListener("change", (e) => loadDraft(e.target.value).catch((err) => status("読み込めません: " + err.message, true)));
 $("#fc-apply").addEventListener("click", applyFinal);
 $("#fc-article").addEventListener("mouseup", () => setTimeout(() => { if (FC.viewing) return; const t = fcSelection(); if (t) newItemPop(t); }, 0));
 document.addEventListener("mousedown", (e) => { const pop = $("#fc-pop"); if (!pop.hidden && !pop.contains(e.target) && !e.target.closest("mark.fc, .fc-item")) pop.hidden = true; });
