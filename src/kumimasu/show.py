@@ -4,6 +4,7 @@ from . import ops
 from .design import sync_design
 from .model import USE_LABEL, Unit
 from .review import DECISION_LABEL, ReviewContext, final_name
+from .terms import material_load, term_states
 from .textutil import excerpt
 from .workdir import WorkDir
 
@@ -46,7 +47,9 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
                             for u in d.units if u.use == use and u.id in by] for use in ("deep", "mention", "drop")},
             "skip": [s.model_dump() for s in d.skip], "aside": [a.model_dump() for a in d.aside],
             "rules": [{"n": i, "on": r.on, "text": r.text} for i, r in enumerate(d.rules, 1)],
-            "conflicts": [c.model_dump() | {"refs": _refs(c.by, by)} for c in d.live_conflicts()]}
+            "conflicts": [c.model_dump() | {"refs": _refs(c.by, by)} for c in d.live_conflicts()],
+            "terms": term_states(d), "load": material_load(d, units),
+            "promoted": [{"id": u.id, "term": u.promoted_for} for u in d.units if u.promoted_for and u.use != "drop"]}
     elif part in ("review", "done"):
         base = wd.review_draft()
         if wd.is_plain_file(base):
@@ -61,6 +64,37 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
                                        if i.rewrite else None),
                            "stale": i.stale, "note_changed": i.note_changed, "by": i.source} for i in rev.items]}
     return snap
+
+
+def term_lines(states: list[dict]) -> list[str]:
+    out = []
+    for t in states:
+        head = f"用語: {t['term']} [{t['label']}]（使う所: {', '.join(t['used_by'])}）"
+        match t["status"]:
+            case "kept":
+                head += f" 説明: {', '.join(t['explained_by'])}" + (
+                    f"（用語の説明として触れるにした: {', '.join(t['promoted'])}）" if t["promoted"] else "")
+            case "dropped":
+                head += (f" 説明の候補: {', '.join(t['candidates'])}"
+                         f" → set DIR explain \"{t['term']}\" で {t['candidates'][0]} を触れるにする")
+            case "missing":
+                head += " → 書き手が初出で説明する"
+        out.append(("警告: " if t["status"] == "dropped" else "") + head)
+    return out
+
+
+def load_lines(load: dict) -> list[str]:
+    out = [(f"使う材料: {load['kept_chars']} 字（掘り下げる {load['deep']} 個 {load['deep_chars']} 字・"
+            f"触れる {load['mention']} 個 {load['mention_chars']} 字）、目標 {load['target']} 字の {load['ratio']} 倍")]
+    for r in load["reasons"]:
+        out.append(f"警告: {r}")
+    if load["over"]:
+        if load["suggestions"]:
+            out.append("    減らす候補（触れる → 書かない）: "
+                       + " / ".join(f"{s['id']}（{s['reason']}・{s['chars']} 字）" for s in load["suggestions"]))
+        if load["suggest_length"]:
+            out.append(f"    または目標の字数を {load['suggest_length']} 字くらいに上げる（set DIR length N）")
+    return out
 
 
 def _ref_text(r: dict) -> str:
@@ -87,6 +121,10 @@ def text(snap: dict) -> str:
             us = d["units"][use]
             lines.append(f"{label} {len(us)}: " + ", ".join(f"{u['id']}「{u['text']}」" for u in us[:12])
                          + (" …" if len(us) > 12 else ""))
+        lines += load_lines(d["load"])
+        if d["terms"]:
+            lines.append("[読者が知らない用語]")
+            lines += term_lines(d["terms"])
         lines += [f"説明しない前提: {s['label']} ({', '.join(s['units'])})" for s in d["skip"]]
         lines += [f"脱線: {a['id']} @ {a['where']}" for a in d["aside"]]
         for c in d["conflicts"]:

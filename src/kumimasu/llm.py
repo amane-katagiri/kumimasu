@@ -90,6 +90,11 @@ def ask_replacements(provider: Provider, prompt: str) -> dict[str, str]:
 
 STR: dict = {"type": "string"}
 INT: dict = {"type": "integer"}
+BOOL: dict = {"type": "boolean"}
+
+
+def ids_in(value: Any, known: set[str]) -> list[str]:
+    return list(dict.fromkeys(x for x in value if isinstance(x, str) and x in known)) if isinstance(value, list) else []
 
 
 def enum(*values: str) -> dict:

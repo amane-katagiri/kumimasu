@@ -76,6 +76,10 @@ def _design_body(wd, what: str, a: list[str], use: str | None, label: str, where
             if what == "takeaway" and len(cur) > TAKEAWAYS_MAX:
                 raise ValueError(f"持ち帰りは {TAKEAWAYS_MAX} 個までです")
             return {key: cur}
+        case "explain":
+            if len(a) != 1:
+                raise ValueError("使い方: set DIR explain TERM")
+            return {"explain": a[0]}
         case "purpose" | "forms":
             if len(a) != 1:
                 raise ValueError(f"使い方: set DIR {what} TEXT")
@@ -97,7 +101,7 @@ def _design_body(wd, what: str, a: list[str], use: str | None, label: str, where
 @app.command("set")
 def set_(path: DirArg,
          what: Annotated[str, typer.Argument(help="unit | takeaway | purpose | order | length | skip | aside | avoid | "
-                                                  "research | forms")],
+                                                  "research | forms | explain")],
          args: Annotated[list[str] | None, typer.Argument(help="See the examples below")] = None,
          use: Annotated[str | None, typer.Option("--use", help="deep | mention | drop (for `unit`)")] = None,
          label: Annotated[str, typer.Option("--label", help="Skip label (for `skip ID on`)")] = "",
@@ -114,7 +118,8 @@ def set_(path: DirArg,
     set DIR aside m42 on [--where "API を比べた所"]  |  set DIR aside m42 off
     set DIR avoid add "FAQ"  |  set DIR avoid rm 1
     set DIR research add "exiftool の -d の書式"  |  set DIR research rm 1   (sent to the web researcher)
-    set DIR forms "比較は表"   (the form preferences shown to the designer and the writer)"""
+    set DIR forms "比較は表"   (the form preferences shown to the designer and the writer)
+    set DIR explain "独自性スコア"   (keep, as mention, the best dropped unit that explains this term)"""
     wd = cc.workdir(path, "design", action="設計の変更")
     src = cc.source(source)
     with errors():

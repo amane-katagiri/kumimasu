@@ -15,6 +15,7 @@ from .interview import unit_lines
 from .mark import KIND_LABEL
 from .model import Design, Project, Unit
 from .research import Research, research_block
+from .terms import first_use_terms, material_load
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -56,6 +57,26 @@ def drop_section(d: Design, drop: list[Unit], mode: str) -> str:
     return ""
 
 
+def terms_section(d: Design) -> str:
+    rows = []
+    for t in first_use_terms(d):
+        how = (f"説明の材料: {', '.join(t['explained_by'])}" if t["status"] == "kept"
+               else "材料に説明が無い。材料から分かる範囲で一言で説明し、分からなければ作らずに、この言葉を使わない書き方にする")
+        rows.append(f"{t['term']}（{how}）")
+    return ("## 初出で説明する用語（読者はこれを知らない。初めて出す所で、何であるか・何を測ったかを一言説明する）\n\n"
+            + _bullets(rows)) if rows else ""
+
+
+def load_section(d: Design, units: list[Unit]) -> str:
+    load = material_load(d, units)
+    if not load["over"]:
+        return ""
+    return (f"## 材料の量\n\n使う材料が、目標の長さに比べて多めです（材料 {load['kept_chars']} 字・目標の {load['ratio']} 倍、"
+            f"触れる材料 {load['mention']} 個）。全部に触れるより、説明できる数に絞ってください。"
+            "掘り下げる材料と、上の用語の説明を優先します。触れる材料は、持ち帰りに要らなければ省いて構いません。"
+            "一つの段落に材料を詰め込んで、説明の無い名前や数字を並べないでください。")
+
+
 def design_block(p: Project, d: Design, units: list[Unit], drop_list: str | None = None) -> str:
     deep, mention, drop = (kept(d, units, x) for x in ("deep", "mention", "drop"))
     parts = [
@@ -67,6 +88,8 @@ def design_block(p: Project, d: Design, units: list[Unit], drop_list: str | None
         "## 読者が持ち帰るもの（大事な順。どれも本文から読み取れるようにする）\n\n" + _bullets(d.takeaways) if d.takeaways else "",
         "## 掘り下げる材料（記事の中心。紙幅の大半をここに使う）\n\n" + unit_lines(deep, with_mark=False) if deep else "",
         "## 触れる材料（一言か短い段落で）\n\n" + unit_lines(mention, with_mark=False) if mention else "",
+        terms_section(d),
+        load_section(d, units),
         drop_section(d, drop, drop_list or d.drop_list),
         *noise_sections(d, units),
         "## 順番の手がかり（緩いもの。節の構成はあなたが決める）\n\n" + _bullets(d.order) if d.order else "",
@@ -106,6 +129,7 @@ def write_used(wd: WorkDir, draft_name: str, d: Design, drop_list: str, provider
     used = {"draft": draft_name, "rules": d.active_rules(), "rules_off": [r.text for r in d.rules if not r.on],
             "avoid": d.avoid, "register": d.formality, "drop_list": drop_list, "forms": d.forms,
             "form_prefs": d.form_prefs, "skip": [s.label for s in d.skip], "aside": [a.id for a in d.aside],
+            "terms": [t["term"] for t in first_use_terms(d)],
             "providers": providers, "design": wd.design_file.name}
     wd.write_json(used_name(draft_name), used)
     return used

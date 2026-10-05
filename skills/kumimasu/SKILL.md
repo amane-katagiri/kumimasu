@@ -55,10 +55,18 @@ kumimasu interview DIR     # providers.interviewer 1 回。4–6 個の質問
 ## 3. 設計（エージェント → 人）
 
 ```
-kumimasu design DIR        # providers.designer 3 回（提案・前提と脱線・見直し）
+kumimasu design DIR        # providers.designer 3 回（提案・前提と脱線・見直し）＋ providers.judge 1 回以上（読者が知らない用語。材料 6 万字ごとに 1 回）
 ```
 
-本人に設計を見てもらう（画面か、チャットで `show` の内容を説明する）。`警告:` は「書かないにしたのに出てしまう内容」と、その原因になる使う単位（`原因:`）を示す。チャットでは、出る内容と原因の単位の中身を伝え、原因を書かないにするか、出てよいとするかを本人に決めてもらう。チャットでの直し方:
+本人に設計を見てもらう（画面か、チャットで `show` の内容を説明する）。`警告:` は「書かないにしたのに出てしまう内容」と、その原因になる使う単位（`原因:`）を示す。チャットでは、出る内容と原因の単位の中身を伝え、原因を書かないにするか、出てよいとするかを本人に決めてもらう。
+
+`show` の `[読者が知らない用語]` は、使う単位に出てくる、読者が説明なしでは分からない言葉（材料で作った言葉・指標・数値など）と、その説明の単位。
+
+- `説明を使う`: 説明の単位も使う。設計の提案のときに自動で触れるにした単位は「用語の説明として触れるにした」と出る。本人に、どの単位を足したかを必ず伝える。
+- `説明が書かない側`（`警告:`）: 本人が use を変えた結果、説明の単位が書かないになっている。説明を足すか（`set DIR explain "用語"`）、そのままにするかを本人に聞く。
+- `材料に説明が無い`: 書き手が初出で一言説明する（下書きの依頼の「初出で説明する用語」に載る）。材料から説明できなければ、書き手はその言葉を使わない書き方にする。
+
+`使う材料: N 字 … 目標の X 倍` に `警告:` が付いたら、材料が多すぎて、書き手が全部を少しずつ詰め込み説明が抜けやすい。`減らす候補` の単位を書かないにするか、目標の字数を上げるかを本人に聞く（勝手に変えない）。チャットでの直し方:
 
 ```
 kumimasu set DIR unit m12 --use deep|mention|drop
@@ -67,8 +75,9 @@ kumimasu set DIR purpose "…" | length 5000 | order "手がかり1" "手がか�
 kumimasu set DIR skip m5 on|off [--label "…"] | aside m42 on|off [--where "…"] | avoid add "…"
 kumimasu set DIR research add "…" | research rm N   # ウェブで調べること（調査役に渡る）
 kumimasu set DIR forms "比較は表"                   # 形の好み（設計と下書きの依頼に載る）
+kumimasu set DIR explain "用語"                     # その用語のいちばんよい説明の単位を触れるにする
 kumimasu rule DIR list | on N | off N | edit N "…" | add "…" | rm N
-kumimasu review DIR        # 使う単位を変えたら、書かないのに出てしまう内容の警告を作り直す
+kumimasu review DIR        # 使う単位を変えたら、書かないのに出てしまう内容と、読者が知らない用語の警告を作り直す（自動では足さない）
 kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）を提案し直す（ほかの use はそのまま）
 ```
 
@@ -82,7 +91,7 @@ kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）
 
 ```
 kumimasu draft DIR         # 調べることがあれば providers.researcher 1 回（ウェブ調査）→ providers.writer 1 回（ツールなし）
-kumimasu check DIR         # providers.judge 2 回＋ providers.detector 2–3 回（surface.runs）
+kumimasu check DIR         # providers.judge 3 回（網羅・割り戻し・読者の目）＋ providers.detector 2–3 回（surface.runs）
 kumimasu revise DIR        # 構造の検査が落ちたときだけ（writer 1 回＋検査、ツールなし）。結果は draft.v2.md
 kumimasu polish DIR [--yes]  # 任意: メタ言説・つなぎの効用文・ダッシュの文だけを多数決で見つけ、--yes でその文だけ直す
 kumimasu confirm DIR --agent [--draft draft.v2.md]
@@ -90,11 +99,13 @@ kumimasu confirm DIR --agent [--draft draft.v2.md]
 
 `draft` はウェブ調査（`research.json`）を先に済ませ、書き手にはツールを渡さず、調査結果を出典付きのデータとして渡す。調べることを変えたあとに調べ直すなら `kumimasu research DIR` か `draft --new-research`。ネットワークを使う段は CLI がそう表示する。`--verify-links` を付けた検査は、非公開のアドレスへは繋がない。
 
+`check` の `reader`（読者の目）は、想定読者になりきって、説明の無い用語・何を測ったか分からない数字・前提の抜けた飛躍を挙げる。構造の検査なので、落ちたら `revise` が初出に短い説明を足す（材料にある説明だけを使い、事実を作らない）。
+
 `--agent` の確定で最終チェックの段階に進む（画面は自動で切り替わる）。
 
 ## 5. 最終チェック（人）
 
-画面で、または `show DIR` の項目をチャットで一つずつ見せて決めてもらう。
+画面で、または `show DIR` の項目をチャットで一つずつ見せて決めてもらう。`[reader/用語|数字|飛躍]`（画面では「読者に不明」）は、書き直しの後も読者に分からないと判定された所。理由と直し方を伝え、残すか書き直すかを本人に決めてもらう。
 
 ```
 kumimasu decide DIR ITEM keep|delete|rewrite|none [--note "…"] [--result "自分の書き直し"] [--regenerate]

@@ -67,6 +67,7 @@ class UnitUse(BaseModel):
     id: str
     use: Use
     why: str = ""
+    promoted_for: str = ""
 
 
 class Rule(BaseModel):
@@ -101,6 +102,13 @@ class Aside(BaseModel):
     why: str = ""
 
 
+class Term(BaseModel):
+    term: str
+    used_by: list[str] = []
+    defined_by: list[str] = []
+    why: str = ""
+
+
 class Design(BaseModel):
     purpose: str = ""
     kind: Kind = "実用"
@@ -119,6 +127,9 @@ class Design(BaseModel):
     conflicts: list[Conflict] = []
     skip: list[Skip] = []
     aside: list[Aside] = []
+    terms: list[Term] = []
+    max_material_ratio: float = 2.0
+    chars_per_mention: int = 150
 
     def active_rules(self) -> list[str]:
         return [r.text for r in self.rules if r.on and r.text.strip()]

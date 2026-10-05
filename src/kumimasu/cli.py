@@ -10,6 +10,7 @@ from . import cli_common as cc
 from . import (
     cli_flow,  # noqa: F401  # registers the checkpoint commands on app
     ops,
+    show,
 )
 from .check import Votes, report_text
 from .check import check as run_check
@@ -46,6 +47,7 @@ from .review import ReviewContext, export_final, require_base
 from .revise import revise as run_revise
 from .server import WriteApp
 from .server import serve as run_server
+from .terms import material_load, term_states
 from .workdir import WorkDir, check_draft_name, init_workdir
 
 
@@ -98,13 +100,15 @@ def interview(path: DirArg, provider: ProviderOpt = None,
     typer.echo(f"\nanswer in {wd.interview_file} or with `kumimasu serve {path}`")
 
 
-def _echo_design_notes(d: Design) -> None:
+def _echo_design_notes(d: Design, units: list) -> None:
     for sk in d.skip:
         typer.echo(f"skip: {sk.label}" + (f" ({', '.join(sk.units)})" if sk.units else ""))
     for a in d.aside:
         typer.echo(f"aside: {a.id} @ {a.where}")
     for c in d.live_conflicts():
         typer.echo(f"warning: {c.message()}")
+    for line in show.term_lines(term_states(d)) + show.load_lines(material_load(d, units)):
+        typer.echo(line)
     if d.avoid:
         typer.echo("avoid: " + " / ".join(d.avoid))
     for t in d.research:
@@ -112,41 +116,43 @@ def _echo_design_notes(d: Design) -> None:
 
 
 @app.command()
-def design(path: DirArg, provider: ProviderOpt = None,
+def design(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None,
            overwrite: Annotated[bool, typer.Option("--overwrite")] = False) -> None:
     """Propose DIR/design.yaml: purpose, takeaways, deep/mention/drop per unit, order hints, forms, the web research
-    list and rules."""
+    list and rules; then find the terms the reader may not know and keep (mention) a dropped unit that explains each."""
     wd = cc.workdir(path, "design", action="設計の提案")
     cfg = cc.config(path)
     with errors():
-        d = run_design(wd, cc.llm(cfg, "designer", provider), cc.design_defaults(cfg), overwrite)
+        d = run_design(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge), cc.design_defaults(cfg),
+                       overwrite)
     n = {u: sum(x.use == u for x in d.units) for u in USES}
     typer.echo(f"wrote {wd.design_file}: deep {n['deep']}, mention {n['mention']}, drop {n['drop']}")
     for t in d.takeaways:
         typer.echo(f"  - {t}")
-    _echo_design_notes(d)
+    _echo_design_notes(d, wd.units())
 
 
 @app.command()
-def noise(path: DirArg, provider: ProviderOpt = None) -> None:
+def noise(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) -> None:
     """Propose 1-3 skipped prerequisites and 1-2 asides for the current design (other uses are kept), then review again."""
     wd = cc.workdir(path, "design", action="前提と脱線の提案")
     cfg = cc.config(path)
     with errors():
-        d = noise_workdir(wd, cc.llm(cfg, "designer", provider), cfg.get("defaults.noise.skip_max"),
-                          cfg.get("defaults.noise.aside_max"))
-    _echo_design_notes(d)
+        d = noise_workdir(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge),
+                          cfg.get("defaults.noise.skip_max"), cfg.get("defaults.noise.aside_max"))
+    _echo_design_notes(d, wd.units())
 
 
 @app.command()
-def review(path: DirArg, provider: ProviderOpt = None,
+def review(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None,
            keep_avoid: Annotated[bool, typer.Option("--keep-avoid", help="Keep the avoid list as edited")] = False) -> None:
-    """Recompute, for the current design, which drop units the kept units would bring in anyway, and the avoid topics."""
+    """Recompute, for the current design, which drop units the kept units would bring in anyway, the avoid topics, and
+    the terms the reader may not know (warnings only; nothing is kept automatically)."""
     wd = cc.workdir(path, "design", action="設計の見直し")
     cfg = cc.config(path)
     with errors():
-        d = review_conflicts(wd, cc.llm(cfg, "designer", provider), keep_avoid)
-    _echo_design_notes(d)
+        d = review_conflicts(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge), keep_avoid)
+    _echo_design_notes(d, wd.units())
 
 
 @app.command()

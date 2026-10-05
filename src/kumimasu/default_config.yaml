@@ -26,6 +26,8 @@ defaults:
     skip_max: 3
     aside_max: 2
   forms: ""
+  max_material_ratio: 2.0
+  chars_per_mention: 150
 interview:
   always_ask:
     - 読者に一つだけ持ち帰ってほしいことは何ですか

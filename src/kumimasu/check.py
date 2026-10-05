@@ -18,7 +18,7 @@ from .interview import unit_lines
 from .keep import KeepStore, text_hash
 from .llm import INT, STR, arr, ask_json, enum, obj, rows
 from .metadiscourse import split_sentences
-from .model import Design, Unit
+from .model import Design, Project, Unit
 from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
 from .surface import (
@@ -28,6 +28,7 @@ from .surface import (
     detect_surface,
     rule_hints,
 )
+from .terms import material_load
 from .textutil import (
     blocks,
     code_free_lines,
@@ -277,10 +278,12 @@ def check_deep_space(f: Facts) -> Check:
 
 
 def check_firsthand(f: Facts) -> Check:
-    fh = [u for u in f.with_use("deep", "mention") if u.firsthand]
+    over = material_load(f.d, f.units)["over"]
+    fh = [u for u in f.with_use(*(("deep",) if over else ("deep", "mention"))) if u.firsthand]
     lost = f.missing(fh)
     share = (len(fh) - len(lost)) / len(fh) if fh else None
-    return _c("firsthand_retained", f"使うと決めた手元だけの単位 → {FIRSTHAND_MIN:.0%} 以上が本文に残る",
+    which = "掘り下げると決めた手元だけの単位（材料が多いので触れる単位は数えない）" if over else "使うと決めた手元だけの単位"
+    return _c("firsthand_retained", f"{which} → {FIRSTHAND_MIN:.0%} 以上が本文に残る",
               None if share is None else share >= FIRSTHAND_MIN, None if share is None else round(share, 2),
               "本文に無い手元だけの単位", [_short(u) for u in lost])
 
@@ -343,13 +346,79 @@ def check_asides(f: Facts) -> Check:
               _share(len(asides) - len(lost), len(asides)), "本文に無い脱線", [_short(u) for u in lost])
 
 
+READER_PROMPT_JA = DATA_NOTE_JA + """
+
+あなたは次の記事の読者です。読者は「{audience}」で、記事の種類は「{kind}」、題は「{topic}」です。この読者になりきって下書きを最初から読み、つまずく所を挙げてください。
+
+- term: 説明なしに使われている用語・略語・この記事で作られた言葉（初めて出る所で、何であるかが書かれていない）
+- number: 何を測ったか・何と比べたか・なぜ大事かが書かれていない数値や指標
+- jump: 前提が抜けていて、前の文から次の文へ論理が飛んでいる所
+
+それぞれについて:
+- kind: term / number / jump
+- quote: 下書きの中の該当する文字列を、そのまま写す（1 文の中の 40 字くらいまで。言い換えない）
+- why: この読者にとって何が分からないかを 1 文で
+- fix: 何を足せば分かるかを 1 文で
+- unit: それを説明している材料の単位の番号（下の材料にあれば。無ければ空）
+
+この読者がふつう知っていることは挙げません。あとで説明が出てくる場合も、初めて出る所で分からなければ挙げます。読者のつまずきが大きい順に、{max_items} 個まで。
+
+# 材料（説明を探すため）
+
+{material}
+
+# 下書き
+
+{draft}"""
+
+READER_KIND_LABEL = {"term": "用語", "number": "数字", "jump": "飛躍"}
+READER_MAX = 12
+
+
+def reader_schema() -> dict:
+    return obj(findings=arr(obj(kind=enum(*READER_KIND_LABEL), quote=STR, why=STR, fix=STR, unit=STR), READER_MAX))
+
+
+def reader_material(d: Design, units: list[Unit]) -> list[Unit]:
+    want = {u.id for u in d.units if u.use in ("deep", "mention")} | {i for t in d.terms for i in t.defined_by}
+    return [u for u in units if u.id in want]
+
+
+def reader_prompt(p: Project, d: Design, units: list[Unit], draft: str) -> str:
+    return READER_PROMPT_JA.format(audience=p.audience, kind=d.kind, topic=p.topic, max_items=READER_MAX,
+                                   material=unit_lines(reader_material(d, units), with_mark=False) or "（なし）",
+                                   draft=draft.strip())
+
+
+def parse_reader(data: dict, draft: str, units: list[Unit]) -> list[dict]:
+    by = {u.id: u for u in units}
+    out, seen = [], set()
+    for row in rows(data, "findings"):
+        kind, quote = row.get("kind"), str(row.get("quote", "")).strip()
+        if kind not in READER_KIND_LABEL or not quote or quote in seen:
+            continue
+        seen.add(quote)
+        unit = row.get("unit") if row.get("unit") in by else ""
+        out.append({"kind": kind, "quote": quote, "why": str(row.get("why", "")).strip(),
+                    "fix": str(row.get("fix", "")).strip(), "unit": unit,
+                    "unit_text": excerpt(by[unit].text, 200) if unit else "", "placed": locate(draft, quote) is not None})
+    return out
+
+
+def check_reader(findings: list[dict], audience: str) -> Check:
+    placed = sum(f["placed"] for f in findings)
+    return _c("reader", f"読者（{audience}）が初めて読んで分からない所 → 無い", not findings, len(findings),
+              f"用語 {sum(f['kind'] == 'term' for f in findings)}・数字 {sum(f['kind'] == 'number' for f in findings)}・"
+              f"飛躍 {sum(f['kind'] == 'jump' for f in findings)}（本文で位置が分かったもの {placed}）", findings)
+
+
 def check_length(chars: int, target: int) -> Check:
     ratio = chars / target if target else None
     return _c("length", f"字数 → 目標の ±{LENGTH_TOLERANCE:.0%}", None if ratio is None else abs(ratio - 1) <= LENGTH_TOLERANCE,
               None if ratio is None else round(ratio, 2), f"{chars} 字 / 目標 {target} 字")
 
 
-def run_checks(name: str, draft: str, units: list[Unit], d: Design, judge: Provider, meta: Provider | None,
+def run_checks(name: str, draft: str, p: Project, units: list[Unit], d: Design, judge: Provider, meta: Provider | None,
                votes: Votes, keep: set[str], fetch: Fetch | None = None) -> CheckReport:
     d = sync_design(d, units)
     infos, idmap = as_info_units(units)
@@ -357,9 +426,10 @@ def run_checks(name: str, draft: str, units: list[Unit], d: Design, judge: Provi
     skips = [x.label for x in d.skip]
     material = "\n".join(u.text for u in units)
     urls = [u for u in extract_urls(draft) if u not in material]
-    with ThreadPoolExecutor(4) as pool:
+    with ThreadPoolExecutor(5) as pool:
         cov = pool.submit(ask_json, judge, coverage_prompt(infos, {DRAFT: draft}), coverage_schema())
         mapped = pool.submit(ask_json, judge, map_prompt(dunits, units, d.takeaways, skips), map_schema())
+        reader = pool.submit(ask_json, judge, reader_prompt(p, d, units, draft), reader_schema())
         surface = pool.submit(surface_checks, draft, units, meta, votes, keep)
         links = pool.submit(fetch, urls) if fetch is not None else None
         presence = {idmap[i]: c.v for i, c in parse_coverage(cov.result(), infos, [DRAFT]).items()}
@@ -368,7 +438,7 @@ def run_checks(name: str, draft: str, units: list[Unit], d: Design, judge: Provi
         checks = [check_drop_absent(f), check_deep_present(f), check_deep_space(f), check_firsthand(f),
                   check_takeaways(f), check_fabrication(f), check_numbers(draft, material),
                   check_links(urls, links.result() if links else None), check_skips(f), check_asides(f),
-                  *surface.result(), check_length(draft_chars(dunits), d.target_length)]
+                  check_reader(parse_reader(reader.result(), draft, units), p.audience), *surface.result(), check_length(draft_chars(dunits), d.target_length)]
     return CheckReport(draft=name, chars=draft_chars(dunits), checks=checks, sources=m.sources)
 
 
@@ -427,7 +497,7 @@ def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str, votes:
         rep = CheckReport(draft=name, chars=draft_chars(info_units(text)),
                           checks=surface_checks(text, wd.units(), meta, votes, keep))
     else:
-        rep = run_checks(name, text, wd.units(), wd.design(), judge, meta, votes, keep, fetch)
+        rep = run_checks(name, text, wd.project(), wd.units(), wd.design(), judge, meta, votes, keep, fetch)
     stem = check_stem(name, surface_only)
     wd.write_json(f"{stem}.json", rep.model_dump())
     wd.write(f"{stem}.txt", report_text(rep))

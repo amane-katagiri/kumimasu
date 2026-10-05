@@ -130,8 +130,12 @@ def surface_fake(prompt: str) -> str:
 
 
 def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_ok: bool = True, deep_unit_chars: bool = True,
-             skip_explained: bool = False):
+             skip_explained: bool = False, terms: list[dict] | None = None, reader: list[dict] | None = None):
     def respond(prompt: str) -> str:
+        if "この読者が説明なしでは分からないもの" in prompt:
+            return json.dumps({"terms": terms or []})
+        if "この読者になりきって" in prompt:
+            return json.dumps({"findings": reader or []})
         if "ウェブで下調べ" in prompt:
             return json.dumps({"findings": [
                 {"topic": 1, "claim": "exiftool の -d は strftime の書式を受け取る。", "source": "https://exiftool.org/filename.html"},

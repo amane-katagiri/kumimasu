@@ -52,7 +52,7 @@ def designed(root: Path) -> WorkDir:
     mark(w, p, p)
     interview(w, p, always_ask())
     ops.confirm(w, "agent-chat")
-    design(w, p, defaults())
+    design(w, p, p, defaults())
     return w
 
 

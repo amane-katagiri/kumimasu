@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .check import CheckReport, Fetch, Votes, check, fresh_report
+from .check import READER_KIND_LABEL, CheckReport, Fetch, Votes, check, fresh_report
 from .design import sync_design
 from .draft import design_block, write_used
 from .generate import DATA_NOTE_JA, OUTPUT_FORMAT_JA, SOURCES_RULES_JA, article_from
@@ -55,9 +55,20 @@ def instructions(rep: CheckReport, target_length: int) -> list[str]:
                 out.append("次の脱線が本文から落ちています。設計の場所の手がかりに入れてください。"
                            "本題との関係の説明や、役に立つ話への結びつけは付けません。\n"
                            + _list([i["text"] for i in c.items]))
+            case "reader":
+                out.append("次の箇所は、読者には分かりません。それぞれ、初めて出る所で一言か一文の説明を足してください"
+                           "（用語なら何であるか、数字なら何を測ったか・何と比べたか、飛躍なら抜けている前提）。"
+                           "説明には材料（下の「材料」があればそれ）にあることだけを使い、材料に無い事実・数値・定義は作りません。"
+                           "材料から説明できないものは、その言葉や数字を使わない書き方に直してください。"
+                           "説明を足した分、ほかの所を縮めて、全体の長さを保ってください。\n" + _list([reader_line(i) for i in c.items]))
             case "length":
                 out.append(f"長さが目標から外れています（{c.detail}）。全体を {target_length} 字くらいにしてください。")
     return out
+
+
+def reader_line(i: dict) -> str:
+    line = f"「{i['quote']}」（{READER_KIND_LABEL[i['kind']]}）: {i['why']} → {i['fix']}"
+    return line + (f"\n    材料 {i['unit']}: {i['unit_text']}" if i.get("unit") else "")
 
 
 def revise_prompt(block: str, draft: str, todo: list[str], research: Research | None = None) -> str:

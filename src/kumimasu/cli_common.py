@@ -105,4 +105,5 @@ def design_defaults(cfg: Config) -> DesignDefaults:
     return DesignDefaults(register=cfg.get("defaults.register"), drop_list=cfg.get("defaults.drop_list"),
                           avoid=cfg.get("defaults.avoid") or [], skip_max=cfg.get("defaults.noise.skip_max"),
                           aside_max=cfg.get("defaults.noise.aside_max"), forms=cfg.get("defaults.forms") or "",
-                          rules=default_rules(cfg.rules_path()))
+                          rules=default_rules(cfg.rules_path()), max_material_ratio=cfg.get("defaults.max_material_ratio"),
+                          chars_per_mention=cfg.get("defaults.chars_per_mention"))

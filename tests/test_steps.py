@@ -132,9 +132,9 @@ def test_interview_questions_and_answers_become_units(wd):
 def test_design_defaults_and_limits(wd):
     p = scripted()
     with pytest.raises(StepError):
-        design(wd, p, defaults())
+        design(wd, p, p, defaults())
     answered(wd, p)
-    d = design(wd, p, defaults())
+    d = design(wd, p, p, defaults())
     uses = {u.id: u.use for u in d.units}
     assert len(d.takeaways) == 3 and d.target_length == 600 and d.formality == "keitai"
     assert uses["m2"] == "drop" and uses["m4"] == "deep" and uses["q1"] == "deep" and "zz" not in uses
@@ -149,7 +149,7 @@ def test_design_defaults_and_limits(wd):
     design_text = next(c["prompt"] for c in p.calls if "記事の設計を提案" in c["prompt"])
     assert "問い: LINE で受け取った写真だけ" in design_text and "選び方の指示" in design_text
     with pytest.raises(StepError):
-        design(wd, p, defaults())
+        design(wd, p, p, defaults())
 
 
 def test_sync_design_adds_late_answers_and_removes_gone_units(wd):
@@ -163,7 +163,7 @@ def test_sync_design_adds_late_answers_and_removes_gone_units(wd):
 def test_draft_prompt_sections(wd):
     p = scripted()
     answered(wd, p)
-    design(wd, p, defaults())
+    design(wd, p, p, defaults())
     d, units = wd.design(), wd.units()
     prompt = draft_prompt(wd.project(), d, units)
     deep_part = prompt.split("## 掘り下げる材料", 1)[1].split("## 触れる材料", 1)[0]
@@ -183,7 +183,7 @@ def test_draft_prompt_sections(wd):
 
 def _ready(wd, p):
     answered(wd, p)
-    design(wd, p, defaults())
+    design(wd, p, p, defaults())
     draft(wd, p, roles())
 
 
@@ -229,7 +229,7 @@ def test_check_flags_violations(wd):
 def test_design_proposes_skips_and_asides(wd):
     p = scripted()
     answered(wd, p)
-    d = design(wd, p, defaults())
+    d = design(wd, p, p, defaults())
     assert [(x.label, x.units) for x in d.skip] == [("EXIF とは何か", ["m2"]), ("タイムゾーンの仕組み", [])]
     assert [(a.id, a.where) for a in d.aside] == [("m7", "名前を付け終えたあと")]
     assert d.use_of("m2") == "drop" and d.use_of("m7") == "mention"
@@ -247,17 +247,17 @@ def test_design_proposes_skips_and_asides(wd):
 def test_noise_keeps_other_uses(wd):
     p = scripted()
     answered(wd, p)
-    design(wd, p, defaults())
+    design(wd, p, p, defaults())
     d = wd.design()
     d = d.model_copy(update={"skip": [], "aside": [],
                              "units": [u.model_copy(update={"use": "deep"}) if u.id == "m10" else u for u in d.units]})
     wd.save_design(d)
 
-    d2 = noise_workdir(wd, p, 3, 2)
+    d2 = noise_workdir(wd, p, p, 3, 2)
     assert d2.use_of("m10") == "deep" and [a.id for a in d2.aside] == ["m7"] and d2.avoid == d.avoid
     wd.save_design(d2.model_copy(update={"aside": [],
                                          "units": [u.model_copy(update={"use": "drop"}) if u.id == "m7" else u for u in d2.units]}))
-    d3 = noise_workdir(wd, p, 3, 2)
+    d3 = noise_workdir(wd, p, p, 3, 2)
     assert d3.aside == [] and d3.use_of("m7") == "drop"
 
 
@@ -381,7 +381,7 @@ def test_blocks_keep_fences_and_neighborhood_adds_heading():
 
 def test_default_rules_packaged_and_rules_file(tmp_path):
     packaged = [r.text for r in rules.default_rules()]
-    assert len(packaged) == 13 and "読者が知っている前提を丁寧に言い直さない。説明は一度だけ、必要な所で" in packaged
+    assert len(packaged) == 16 and "この記事で作った用語や指標は、初出で一言説明する" in packaged and "読者が知っている前提を丁寧に言い直さない。説明は一度だけ、必要な所で" in packaged
     assert any("「まとめ」の節で繰り返さない" in t for t in packaged)
     user = tmp_path / "user.yaml"
     user.write_text("- 自分のルール\n", encoding="utf-8")
@@ -394,7 +394,7 @@ def test_default_rules_packaged_and_rules_file(tmp_path):
 def test_off_rules_stay_in_design_but_not_in_prompt(wd):
     p = scripted()
     answered(wd, p)
-    d = design(wd, p, defaults())
+    d = design(wd, p, p, defaults())
     d = d.model_copy(update={"rules": [Rule(text="使うルール"), Rule(text="止めたルール", on=False), Rule(text=" ")]})
     wd.save_design(d)
     again = wd.design()
@@ -476,7 +476,7 @@ def test_server_state_answers_and_design(wd):
         assert wd.interview().questions[1].answer == "EXIF の無い写真の扱い"
         code, _ = c.put("/api/design", {"units": {"m1": "deep"}})
         assert code == 409
-        design(wd, p, defaults())
+        design(wd, p, p, defaults())
 
         ops.set_stage(wd, "design")
         assert c.get("/api/state")[1]["conflicts"] == [{"id": "m3", "by": ["m12"], "level": "yes", "note": "コマンドが出る"}]
@@ -591,7 +591,7 @@ def test_research_gets_no_material_and_the_writer_gets_no_tools(wd, tmp_path, mo
     p = scripted()
     answered(wd, p)
     ops.set_stage(wd, "design")
-    d = design(wd, p, defaults())
+    d = design(wd, p, p, defaults())
     assert d.research == ["exiftool の -d の書式"]
     ops.set_stage(wd, "drafting")
     res = research(wd, p, d)
@@ -732,7 +732,7 @@ def test_waiting_follows_stage_and_files(wd):
     w = ops.waiting(wd)
     assert w["doing"] == "design" and w["title"] == "エージェントが設計を作っています"
     assert w["steps"][-1] == {"label": "設計の確認（あなた）", "state": "todo"}
-    design(wd, p, defaults())
+    design(wd, p, p, defaults())
     assert ops.waiting(wd) is None
     ops.confirm(wd, "human-ui")
     w = ops.waiting(wd)
@@ -752,7 +752,7 @@ def test_waiting_skips_research_without_topics(wd):
     p = scripted()
     answered(wd, p)
     ops.confirm(wd, "agent-chat")
-    design(wd, p, defaults())
+    design(wd, p, p, defaults())
     ops.update_design(wd, {"research": []}, "human-ui")
     ops.confirm(wd, "human-ui")
     w = ops.waiting(wd)
@@ -769,7 +769,7 @@ def test_server_reports_waiting_in_version(wd):
     with serving(wd) as c:
         code, v = c.get("/api/version")
         assert code == 200 and v["waiting"]["doing"] == "design"
-        design(wd, p, defaults())
+        design(wd, p, p, defaults())
         code, v2 = c.get("/api/version")
         assert v2["waiting"] is None and v2["version"] != v["version"]
 
@@ -777,7 +777,7 @@ def test_server_reports_waiting_in_version(wd):
 def test_conflict_notes_lose_unit_refs_and_show_lists_causes(wd):
     p = scripted()
     answered(wd, p)
-    d = design(wd, p, defaults())
+    d = design(wd, p, p, defaults())
     d = parse_review({"conflicts": [{"id": "m3", "level": "partial", "by": ["m12", "m3"], "note": "m12 のコマンドの書式"}]}, d)
     assert [(c.id, c.by, c.note) for c in d.conflicts] == [("m3", ["m12"], "コマンドの書式")]
     wd.save_design(d)

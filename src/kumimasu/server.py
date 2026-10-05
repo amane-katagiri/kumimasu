@@ -29,6 +29,7 @@ from .review import (
     final_name,
     is_final,
 )
+from .terms import material_load, term_states
 from .workdir import DRAFT_NAME, WorkDir
 
 if TYPE_CHECKING:
@@ -131,7 +132,8 @@ class WriteApp:
                 "units": [u.model_dump() | {"firsthand": u.firsthand} for u in units],
                 "interview": wd.interview().model_dump() if wd.interview_file.exists() else None,
                 "design": design.model_dump() if design else None,
-                "conflicts": [c.model_dump() for c in design.live_conflicts()] if design else []}
+                "conflicts": [c.model_dump() for c in design.live_conflicts()] if design else [],
+                "terms": term_states(design) if design else [], "load": material_load(design, units) if design else None}
 
     def save_answers(self, body: dict) -> dict:
         answers = body.get("answers")

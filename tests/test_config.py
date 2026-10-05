@@ -117,7 +117,7 @@ def test_design_uses_rules_file(places):
     mark(w, p, p)
     interview(w, p, always_ask())
     ops.confirm(w, "agent-chat")
-    assert [r.text for r in design(w, p, defaults()).rules] == ["設定ファイルのルール"]
+    assert [r.text for r in design(w, p, p, defaults()).rules] == ["設定ファイルのルール"]
 
 
 def test_cli_override_and_config_command(places, monkeypatch):

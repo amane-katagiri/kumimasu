@@ -13,7 +13,7 @@ from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
 from .draft import read_used
 from .errors import StepError
 from .files import append_jsonl, atomic_write, read_jsonl
-from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, Unit, UnitUse
+from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, Unit
 from .research import research_name
 from .review import (
     ApplyResult,
@@ -24,6 +24,7 @@ from .review import (
     require_base,
     save_decisions,
 )
+from .terms import clear_promotion, explain_term
 from .textutil import excerpt
 from .workdir import WorkDir, now
 
@@ -93,7 +94,7 @@ def answer(wd: WorkDir, qid: str, text: str, source: str) -> Interview:
 
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
     """The design edits of the page, as one body: purpose, takeaways, order, avoid, rules, skip, aside, target_length,
-    units ({id: use}). A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides."""
+    units ({id: use}), explain (a term whose best dropped explanation becomes mention). A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides."""
     with LOCK:
         require_stage(wd, "design", action="設計の変更")
         units = {u.id: u for u in wd.units()}
@@ -128,10 +129,12 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
                 raise ValueError(f"知らない単位です: {', '.join(sorted(unknown))}")
             if any(v not in USES for v in uses.values()):
                 raise ValueError(f"use は {', '.join(USES)} のどれかにしてください")
-            upd["units"] = [UnitUse(id=u.id, use=uses.get(u.id, u.use),
-                                    why=u.why if uses.get(u.id, u.use) == u.use else "手で変更")
+            upd["units"] = [u if uses.get(u.id, u.use) == u.use
+                            else clear_promotion(u.model_copy(update={"use": uses[u.id], "why": "手で変更"}), uses[u.id])
                             for u in d.units]
         d = d.model_copy(update=upd)
+        if "explain" in body:
+            d = explain_term(d, str(body["explain"]))
         d = d.model_copy(update={
             "skip": [x.model_copy(update={"units": [i for i in x.units if uses.get(i, "drop") == "drop"]}) for x in d.skip],
             "aside": [a for a in d.aside if uses.get(a.id) != "drop"]})
@@ -303,7 +306,7 @@ WORK = {
     "draft": ("下書きを書く", "エージェントが下書きを書いています",
               "設計・使う材料・調査結果を 1 回の依頼で渡して、記事を通しで書かせています。"),
     "check": ("検査する", "エージェントが下書きを検査しています",
-              "設計に照らして下書きを確かめています（書かない単位が出ていないか、掘り下げる単位が厚いか、作り話が無いか、など）。"),
+              "設計に照らして下書きを確かめています（書かない単位が出ていないか、掘り下げる単位が厚いか、作り話が無いか、読者に分からない所が無いか、など）。"),
     "finish": ("仕上げて渡す", "エージェントが仕上げています",
                "検査の結果を見て、構造の検査が落ちていれば 1 回だけ書き直し、最終チェックに渡します。"),
 }

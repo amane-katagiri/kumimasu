@@ -45,7 +45,7 @@ def make_wd(root, p=None) -> WorkDir:
 def to_design(w: WorkDir, p=None) -> None:
     p = p or scripted()
     ops.confirm(w, "agent-chat")
-    design(w, p, defaults())
+    design(w, p, p, defaults())
 
 
 def to_review(w: WorkDir, p=None) -> None:
@@ -216,7 +216,7 @@ def test_restart_rounds(wd):
     assert n == 2 and ops.stage(wd) == "design" and wd.design_file.name == "design.r2.yaml" and not wd.design_file.exists()
     assert wd.draft_base() == "draft.r2.md" and (wd.root / "design.yaml").exists() and wd.interview_file.exists()
     assert ops.wait_for(wd, "design", timeout=0) is None
-    design(wd, scripted(), defaults())
+    design(wd, scripted(), scripted(), defaults())
     ops.confirm(wd, "agent-chat")
     draft(wd, scripted(), roles(), wd.draft_base())
     assert (wd.root / "draft.r2.md").exists() and (wd.root / "draft.md").exists()

@@ -8,6 +8,7 @@ from .generate import DATA_NOTE_JA
 from .interview import strip_unit_refs, unit_lines
 from .llm import STR, arr, ask_json, enum, obj, rows, strings
 from .model import USES, Aside, Conflict, Design, Project, Rule, Skip, Unit, UnitUse
+from .terms import find_terms, promote_definitions
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -86,9 +87,11 @@ class DesignDefaults:
     aside_max: int
     forms: str
     rules: list[Rule]
+    max_material_ratio: float
+    chars_per_mention: int
 
 
-def design(wd: WorkDir, provider: Provider, defaults: DesignDefaults, overwrite: bool = False) -> Design:
+def design(wd: WorkDir, provider: Provider, judge: Provider, defaults: DesignDefaults, overwrite: bool = False) -> Design:
     if wd.design_file.exists() and not overwrite:
         raise StepError(f"{wd.design_file} はすでにあります。作り直すなら --overwrite を付けてください")
     p = wd.project()
@@ -98,8 +101,10 @@ def design(wd: WorkDir, provider: Provider, defaults: DesignDefaults, overwrite:
     d = parse_design(ask_json(provider, design_prompt(p, units, defaults.forms), design_schema()), p, units,
                      defaults.rules)
     d = d.model_copy(update={"formality": defaults.register, "drop_list": defaults.drop_list,
-                             "form_prefs": defaults.forms})
+                             "form_prefs": defaults.forms, "max_material_ratio": defaults.max_material_ratio,
+                             "chars_per_mention": defaults.chars_per_mention})
     d = propose_noise(d, p, units, baseline_text(wd), provider, defaults.skip_max, defaults.aside_max)
+    d = promote_definitions(d.model_copy(update={"terms": find_terms(d, p, units, judge)}))
     d = find_conflicts(d, p, units, provider)
     d = d.model_copy(update={"avoid": merge_avoid(defaults.avoid, d.avoid)})
     wd.save_design(d)
@@ -193,11 +198,12 @@ def propose_noise(d: Design, p: Project, units: list[Unit], baseline: str, provi
     return parse_noise(data, d, units, skip_max, aside_max)
 
 
-def noise_workdir(wd: WorkDir, provider: Provider, skip_max: int, aside_max: int) -> Design:
+def noise_workdir(wd: WorkDir, provider: Provider, judge: Provider, skip_max: int, aside_max: int) -> Design:
     units = wd.units()
     p = wd.project()
     old = wd.design()
     d = propose_noise(old, p, units, baseline_text(wd), provider, skip_max, aside_max)
+    d = d.model_copy(update={"terms": find_terms(d, p, units, judge)})
     d = find_conflicts(d, p, units, provider).model_copy(update={"avoid": old.avoid})
     wd.save_design(d)
     return d
@@ -259,10 +265,11 @@ def find_conflicts(d: Design, p: Project, units: list[Unit], provider: Provider)
     return parse_review(ask_json(provider, review_prompt(p, d, units), review_schema()), d)
 
 
-def review_conflicts(wd: WorkDir, provider: Provider, keep_avoid: bool = False) -> Design:
+def review_conflicts(wd: WorkDir, provider: Provider, judge: Provider, keep_avoid: bool = False) -> Design:
     units = wd.units()
-    old = wd.design()
-    d = find_conflicts(old, wd.project(), units, provider)
+    old = sync_design(wd.design(), units)
+    p = wd.project()
+    d = find_conflicts(old.model_copy(update={"terms": find_terms(old, p, units, judge)}), p, units, provider)
     if keep_avoid:
         d = d.model_copy(update={"avoid": old.avoid})
     wd.save_design(d)

@@ -14,7 +14,7 @@
   --no: var(--sage); --partial: var(--ochre); --yes: var(--stone); --answer: var(--accent);
   --ok: var(--sage); --bad: var(--brick); --code-bg: #efede8;
   --k-meta: #a8812b; --k-glue: #8a6b9b; --k-lint: #8a8781; --k-drop: #b45a49; --k-fabrication: #8e3c4e;
-  --k-number: #4a7795; --k-link: #3b827c; --k-user: #5f8655;
+  --k-number: #4a7795; --k-link: #3b827c; --k-user: #5f8655; --k-reader: #b0663a;
   --pop-shadow: 0 10px 30px rgb(40 38 34 / .09);
   --font: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
     "Noto Sans JP", "Noto Sans CJK JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
@@ -32,7 +32,7 @@
     --sage: #94b396; --sage-text: #a6c3a7; --ochre: #d0ae66; --ochre-text: #d8b977; --brick: #d98f84; --stone: #77746e;
     --code-bg: #282926;
     --k-meta: #d4ae5e; --k-glue: #b9a0cb; --k-lint: #a29e96; --k-drop: #e0947f; --k-fabrication: #d98b9c;
-    --k-number: #8fb5cf; --k-link: #7fbfb6; --k-user: #9cbf8e;
+    --k-number: #8fb5cf; --k-link: #7fbfb6; --k-user: #9cbf8e; --k-reader: #e0a47c;
     --pop-shadow: 0 10px 30px rgb(0 0 0 / .35);
   }
 }
@@ -148,7 +148,33 @@ main { flex: 1; }
 .rule button { border: 0; background: transparent; color: var(--ink-3); border-radius: var(--r); padding: 0 8px; font-size: 16px; line-height: 1.6; }
 .rule button:hover { color: var(--brick); background: var(--fill); }
 .add { margin-top: var(--s2); }
-#conflicts:not(:empty) { margin-bottom: var(--s4); }
+#conflicts:not(:empty), #terms:not(:empty) { margin-bottom: var(--s4); }
+.load { margin-top: var(--s3); font-size: var(--t-s); color: var(--ink-2); }
+.load .sum { display: flex; flex-wrap: wrap; gap: 0 var(--s3); font-variant-numeric: tabular-nums; }
+.load .sum b { color: var(--ink); font-weight: 600; }
+.load.over .sum b { color: var(--ochre-text); }
+.meter { position: relative; height: 4px; border-radius: 2px; background: var(--fill); margin: var(--s2) 0 var(--s1); }
+.meter i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--sage); }
+.load.over .meter i { background: var(--ochre); }
+.meter s { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--ink-3); }
+.advice { margin: var(--s3) 0 0; padding: var(--s1) 0 var(--s1) var(--s3); border-left: 2px solid var(--ochre); }
+.advice p { margin: 0 0 var(--s1); }
+.advice ul { list-style: none; margin: 0; padding: 0; }
+.advice li { display: flex; align-items: baseline; gap: var(--s2); padding: 2px 0; }
+.advice li .tx { flex: 1; min-width: 0; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.advice li .btn, .terms .btn { padding: 0 8px; white-space: nowrap; }
+.advice .acts { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+.terms { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.terms li { padding: var(--s2) 0 var(--s2) var(--s3); border-left: 2px solid var(--line); margin-bottom: var(--s2); }
+.terms li.dropped { border-left-color: var(--ochre); }
+.terms li.missing { border-left-color: var(--k-reader); }
+.terms .what { overflow-wrap: anywhere; }
+.terms .what b { font-weight: 600; }
+.terms .lv { color: var(--ink-3); font-size: var(--t-s); margin-left: var(--s2); white-space: nowrap; }
+.terms li.dropped .lv { color: var(--ochre-text); }
+.terms li.missing .lv { color: var(--k-reader); }
+.terms .refline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); color: var(--ink-3); font-size: var(--t-s); }
+.unit .head .promoted { color: var(--accent); }
 
 #foot { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s5);
   padding: var(--s3) var(--gutter); background: var(--bg); border-top: 1px solid var(--line); }
@@ -422,8 +448,10 @@ function renderUnits() {
     row.className = "unit" + (use === "drop" ? " drop" : "");
     row.id = `unit-${u.id}`;
     const same = u.members && u.members.length ? `<span>同じ内容: ${u.members.map(esc).join(", ")}</span>` : "";
+    const promoted = d && use !== "drop" ? d.units.find((x) => x.id === u.id && x.promoted_for) : null;
+    const pr = promoted ? `<span class="promoted">用語「${esc(promoted.promoted_for)}」の説明として触れる</span>` : "";
     const ctx = u.context ? `<div class="why">問い: ${esc(u.context)}</div>` : "";
-    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span>${esc(where)}</span>` : ""}${same}</div>${ctx}${body}</div>${seg}`;
+    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span>${esc(where)}</span>` : ""}${same}${pr}</div>${ctx}${body}</div>${seg}`;
     row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => save("/api/design", { units: { [u.id]: b.dataset.use } }, true)));
     row.querySelector("button[data-noise=skip]")?.addEventListener("click", () =>
       save("/api/design", { toggle_skip: { unit: u.id, on: !isSkip } }, true));
@@ -465,7 +493,7 @@ function renderDesign() {
   box.innerHTML = `<h2>設計</h2>
     ${area("purpose", "ねらい", "", d.purpose)}
     ${area("takeaways", "読者が持ち帰るもの", "1 行に 1 つ、最大 3 つ", d.takeaways.join("\n"))}
-    ${field("target_length", "目標の字数", "", `<div class="length"><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}"><div class="counts" id="counts"></div></div>`)}
+    ${field("target_length", "目標の字数", "", `<div class="length"><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}"><div class="counts" id="counts"></div></div><div id="load"></div>`)}
     <h3>組み立て</h3>
     ${area("order", "順番の手がかり", "1 行に 1 つ", d.order.join("\n"))}
     ${area("forms", "形", "1 行に 1 つ。内容が並び・手順・比較・コードのときに使う形", d.forms.join("\n"))}
@@ -477,6 +505,7 @@ function renderDesign() {
     <div id="skips">${d.skip.map((x, i) => `<div class="noise"><input data-skip="${i}" aria-label="前提の名前" value="${esc(x.label)}"><span class="refs">${x.units.map(esc).join(", ")}</span></div>`).join("") || `<p class="note">なし。材料の「前提扱い」で足せます。</p>`}</div></div>
     <div class="field"><span class="label">脱線</span><p class="hint">著者が出くわした場面に入れる。1–2 個</p>
     <div id="asides">${d.aside.map((x, i) => `<div class="noise"><span class="refs">${esc(x.id)}</span><input data-aside="${i}" aria-label="場所の手がかり" placeholder="場所の手がかり" value="${esc(x.where)}"></div>`).join("") || `<p class="note">なし。材料の「脱線」で足せます。</p>`}</div></div>
+    <div id="terms"></div>
     <div id="conflicts"></div>
     <h3>書き方のルール</h3><p class="hint">オフのルールは design.yaml に残り、下書きの依頼には載らない</p>
     <div id="rules"></div>`;
@@ -487,6 +516,8 @@ function renderDesign() {
     target_length: parseInt($("#target_length").value, 10) || d.target_length,
   }, false));
   renderCounts();
+  renderLoad();
+  renderTerms();
   renderConflicts();
   renderRules();
   ["#purpose", "#takeaways", "#order", "#avoid", "#research", "#forms", "#form_prefs", "#target_length"].forEach((id) => $(id).addEventListener("input", push));
@@ -534,6 +565,48 @@ function renderRules() {
   });
 }
 
+const num = (n) => Number(n).toLocaleString("ja-JP");
+const refList = (ids, n = 6) => refs(ids.slice(0, n)) + (ids.length > n ? `<span>ほか ${ids.length - n}</span>` : "");
+
+function renderLoad() {
+  const box = $("#load");
+  const ld = S.data.load;
+  if (!box || !ld) return;
+  const scale = Math.max(ld.max_ratio * 1.5, ld.ratio);
+  box.className = "load" + (ld.over ? " over" : "");
+  const sug = ld.suggestions;
+  box.innerHTML = `<div class="sum"><span>使う材料 <b>${num(ld.kept_chars)} 字</b>（目標の <b>${ld.ratio} 倍</b>）</span><span>触れる ${ld.mention} 個（目安 ${ld.mention_max} 個まで）</span></div>
+    <div class="meter" role="img" aria-label="使う材料は目標の字数の ${ld.ratio} 倍。目安は ${ld.max_ratio} 倍まで"><i style="width:${Math.min(100, ld.ratio / scale * 100)}%"></i><s style="left:${ld.max_ratio / scale * 100}%"></s></div>` +
+    (ld.over ? `<div class="advice">${ld.reasons.map((r) => `<p>${esc(r)}。書き手が全部を少しずつ詰め込み、説明が抜けやすくなります。</p>`).join("")}
+      ${sug.length ? `<p class="label">減らす候補（触れる → 書かない）</p><ul>${sug.map((x) => `<li>${refs([x.id])}<span class="tx" title="${esc(x.text)}">${esc(x.reason)}・${num(x.chars)} 字　${esc(x.text)}</span><button type="button" class="btn" data-drop="${esc(x.id)}">書かないにする</button></li>`).join("")}</ul>` : ""}
+      <div class="acts">${sug.length > 1 ? `<button type="button" class="btn" id="drop-all">候補 ${sug.length} 個をまとめて書かないにする</button>` : ""}
+      ${ld.suggest_length ? `<button type="button" class="btn quiet" id="raise-length">目標を ${num(ld.suggest_length)} 字に上げる</button>` : ""}</div></div>` : "");
+  box.querySelectorAll("button[data-drop]").forEach((b) => b.addEventListener("click", () => save("/api/design", { units: { [b.dataset.drop]: "drop" } }, true)));
+  $("#drop-all")?.addEventListener("click", () => save("/api/design", { units: Object.fromEntries(sug.map((x) => [x.id, "drop"])) }, true));
+  $("#raise-length")?.addEventListener("click", () => save("/api/design", { target_length: ld.suggest_length }, true));
+}
+
+function renderTerms() {
+  const box = $("#terms");
+  if (!box) return;
+  const ts = S.data.terms;
+  if (!ts.length) { box.innerHTML = ""; return; }
+  const n = (st) => ts.filter((t) => t.status === st).length;
+  const how = (t) => {
+    switch (t.status) {
+      case "kept": return `<div class="refline"><span>説明</span>${refList(t.explained_by)}${t.promoted.length ? `<span>（用語の説明として触れるにした）</span>` : ""}</div>`;
+      case "dropped": return `<div class="refline"><span>説明（書かない側）</span>${refList(t.candidates, 4)}<button type="button" class="btn" data-explain="${esc(t.term)}">説明を触れるにする</button></div>`;
+      case "missing": return `<div class="refline"><span>材料に説明が無いので、書き手が初出で説明する</span></div>`;
+      default: return `<div class="refline"><span>説明しない前提にした</span></div>`;
+    }
+  };
+  box.innerHTML = `<span class="label">読者が知らない用語</span><p class="hint">使う材料に出てくる、読者が知らないかもしれない言葉と、その説明の材料。説明が書かない側 ${n("dropped")}・材料に説明が無い ${n("missing")}・説明を使う ${n("kept")}。use を変えたら <code>kumimasu review DIR</code> で計算し直す</p>
+    <ul class="terms">${ts.map((t) => `<li class="${t.status}"><div class="what"><b>${esc(t.term)}</b><span class="lv">${esc(t.label)}</span></div>
+      ${t.why ? `<div class="refline"><span>${esc(t.why)}</span></div>` : ""}
+      <div class="refline"><span>使う所</span>${refList(t.used_by)}</div>${how(t)}</li>`).join("")}</ul>`;
+  box.querySelectorAll("button[data-explain]").forEach((b) => b.addEventListener("click", () => save("/api/design", { explain: b.dataset.explain }, true)));
+}
+
 function renderConflicts() {
   const box = $("#conflicts");
   if (!box) return;
@@ -563,7 +636,7 @@ async function save(path, body, rerender) {
     if (rerender) { renderUnits(); renderDesign(); return; }
     if (unitsChanged()) renderUnits();
     else renderFilters();
-    if (S.data.design) { renderCounts(); renderConflicts(); }
+    if (S.data.design) { renderCounts(); renderLoad(); renderTerms(); renderConflicts(); }
   } catch (e) { status("保存できません: " + e.message, true); }
 }
 

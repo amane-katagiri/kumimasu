@@ -22,6 +22,7 @@ KEYS: dict[str, type] = {**{f"providers.{r}": str for r in ROLES},
                          "workdir_root": str,
                          "defaults.register": str, "defaults.drop_list": str, "defaults.avoid": list,
                          "defaults.noise.skip_max": int, "defaults.noise.aside_max": int, "defaults.forms": str,
+                         "defaults.max_material_ratio": float, "defaults.chars_per_mention": int,
                          "interview.always_ask": list}
 CHOICES = {"defaults.register": ("keitai", "joutai"), "defaults.drop_list": ("topics", "full", "none")}
 PATH_KEYS = ("cache_dir", "rules_file", "workdir_root")
@@ -213,6 +214,8 @@ TEMPLATE = """# kumimasu の設定。書いた値だけが下の層（ユーザ�
 #     skip_max: 3
 #     aside_max: 2
 #   forms: ""              # 形の好み（例: 比較は表、手順は番号付きリスト）
+#   max_material_ratio: 2.0  # 使う材料（掘り下げる・触れる）の字数が目標の字数の何倍を超えたら多すぎと警告するか
+#   chars_per_mention: 150   # 触れる材料 1 個あたりの目安の字数（目標の字数 / これ を超えたら多すぎと警告）
 # interview:
 #   always_ask:            # どのインタビューにも足す質問
 #     - 読者に一つだけ持ち帰ってほしいことは何ですか

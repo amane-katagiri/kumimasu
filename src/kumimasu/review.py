@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 import yaml
 from pydantic import BaseModel
 
-from .check import CheckReport, dash_hits, fresh_report
+from .check import READER_KIND_LABEL, CheckReport, dash_hits, fresh_report
 from .files import atomic_write, create_new, dump_yaml
 from .generate import DATA_NOTE_JA
 from .infounits import info_units
@@ -30,7 +30,7 @@ Decision = Literal["", "keep", "delete", "rewrite"]
 DECISION_LABEL = {"": "未決", "keep": "残す", "delete": "削る", "rewrite": "書き直す"}
 ITEM_KIND_LABEL = {"meta": "メタ言説", "glue": "つなぎの効用文", "lint": "表記", "drop": "書かないはずの事柄",
                    "fabrication": "材料に無い体験", "number": "出典の無い数値", "link": "開けないリンク",
-                   "user": "自分で足した項目"}
+                   "reader": "読者に不明", "user": "自分で足した項目"}
 
 
 class Rewrite(BaseModel):
@@ -106,6 +106,10 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
                         at = src.find(it["number"], ctx[0]) if ctx else src.find(it["number"])
                         add("number", "", it["context"], (at, at + len(it["number"])) if at >= 0 else None,
                             reason=c.relation)
+                    case "reader":
+                        why = f"{it['why']}\n直し方: {it['fix']}" if it["fix"] else it["why"]
+                        add("reader", READER_KIND_LABEL[it["kind"]], it["quote"], locate(src, it["quote"]), reason=why,
+                            unit={"id": it["unit"], "text": units.get(it["unit"], it["unit_text"])} if it["unit"] else None)
                     case "links":
                         if it.get("verdict", "ok") != "ok":
                             at = src.find(it["url"])
