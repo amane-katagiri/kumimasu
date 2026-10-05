@@ -13,6 +13,8 @@ USES: tuple[str, ...] = get_args(Use)
 
 Stage = Literal["interview", "design", "drafting", "review", "done"]
 STAGES: tuple[str, ...] = get_args(Stage)
+USE_LABEL = {"deep": "掘り下げる", "mention": "触れる", "drop": "書かない"}
+REGISTER_LABEL = {"keitai": "敬体（です・ます）", "joutai": "常体（だ・である）"}
 SOURCES: tuple[str, ...] = ("human-ui", "agent-chat", "auto", "agent")
 
 

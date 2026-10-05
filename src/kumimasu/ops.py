@@ -229,11 +229,11 @@ def handoffs(wd: WorkDir) -> list[dict]:
     return read_jsonl(wd.root / HANDOFFS)
 
 
-def find_handoff(wd: WorkDir, for_stage: str) -> dict | None:
+def find_handoff(wd: WorkDir, for_stage: str, rows: list[dict] | None = None) -> dict | None:
     target = "review" if for_stage == "done" else for_stage
     r = wd.round
-    rows = [h for h in handoffs(wd) if h["stage"] == target and h["round"] == r]
-    return rows[-1] if rows else None
+    found = [h for h in (handoffs(wd) if rows is None else rows) if h["stage"] == target and h["round"] == r]
+    return found[-1] if found else None
 
 
 def wait_for(wd: WorkDir, for_stage: str, timeout: float | None = None, interval: float = 1.0) -> dict | None:
@@ -271,13 +271,19 @@ VERSIONED_GLOBS = ("design*.yaml", "review.*.yaml", "draft*.md", "draft*.json", 
 
 
 def version(wd: WorkDir) -> str:
-    files = [wd.root / n for n in VERSIONED] + [p for g in VERSIONED_GLOBS for p in wd.root.glob(g)]
-    parts = sorted(f"{f.name}:{f.stat().st_size}:{f.stat().st_mtime_ns}" for f in files if f.is_file())
-    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+    parts = []
+    for f in [wd.root / n for n in VERSIONED] + [p for g in VERSIONED_GLOBS for p in wd.root.glob(g)]:
+        try:
+            st = f.stat()
+        except FileNotFoundError:
+            continue
+        parts.append(f"{f.name}:{st.st_size}:{st.st_mtime_ns}")
+    return hashlib.sha1("|".join(sorted(parts)).encode()).hexdigest()[:16]
 
 
 def stage_info(wd: WorkDir) -> dict:
     p = wd.project()
+    rows = handoffs(wd)
     return {"stage": p.stage, "round": p.round, "stages": list(STAGES), "labels": STAGE_LABEL,
-            "draft": wd.review_draft(), "handoff": find_handoff(wd, p.stage) if p.stage == "done" else None,
-            "last_handoff": handoffs(wd)[-1] if handoffs(wd) else None}
+            "draft": wd.review_draft(), "handoff": find_handoff(wd, p.stage, rows) if p.stage == "done" else None,
+            "last_handoff": rows[-1] if rows else None}

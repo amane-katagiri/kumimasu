@@ -864,9 +864,9 @@ async function pushReview(repaint) {
     const r = await api(`/api/review/${encodeURIComponent(FC.draft)}`, { method: "PUT", body });
     FC.items = r.items; FC.dirty = r.dirty;
     FC.removed = [];
+    S.version = r.version;
     setApplyEnabled();
     if (repaint) paintFinal(); else renderItems();
-    try { S.version = (await api("/api/version")).version; } catch (e) { /* the next poll catches up */ }
     status("保存しました");
   } catch (e) { status("保存できません: " + e.message, true); throw e; }
 }
@@ -875,9 +875,9 @@ async function applyFinal() {
   try {
     if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
     status("反映中…");
-    const r = await api(`/api/apply/${encodeURIComponent(FC.draft)}`, { method: "POST", body: {} });
-    const rv = await api(`/api/review/${encodeURIComponent(FC.draft)}`);
-    FC.items = rv.items; FC.dirty = rv.dirty;
+    const a = await api(`/api/apply/${encodeURIComponent(FC.draft)}`, { method: "POST", body: {} });
+    const r = a.result;
+    FC.items = a.review.items; FC.dirty = a.review.dirty; S.version = a.review.version;
     paintFinal();
     FC.lastApply = r;
     FC.finals[FC.draft] = r.out;

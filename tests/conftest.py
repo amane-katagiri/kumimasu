@@ -53,7 +53,7 @@ class Client:
 
 @contextmanager
 def serving(wd, rewriter=None):
-    server = make_server(WriteApp(wd, rewriter), 0, TOKEN)
+    server = make_server(WriteApp(wd, rewriter, 3), 0, TOKEN)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield Client(f"http://127.0.0.1:{server.server_address[1]}")

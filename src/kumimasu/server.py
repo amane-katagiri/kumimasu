@@ -16,15 +16,18 @@ from .check import check_stem
 from .design import sync_design
 from .draft import read_used
 from .errors import LLMError, StepError
+from .interview import SEARCHABLE_LABEL
+from .model import REGISTER_LABEL, USE_LABEL
 from .render import render
 from .review import (
+    DECISION_LABEL,
+    ITEM_KIND_LABEL,
     ReviewContext,
     base_drafts,
     download_name,
     final_changes,
     final_name,
     is_final,
-    load_review,
 )
 from .workdir import DRAFT_NAME, WorkDir
 
@@ -33,10 +36,22 @@ if TYPE_CHECKING:
 
 HOST = "127.0.0.1"
 SOURCE = "human-ui"
+MAX_BODY = 2 * 1024 * 1024
+TOKEN_HEADER = "X-Kumimasu-Token"
+TOKEN_SLOT = b"{{KUMIMASU_TOKEN}}"
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                               "style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+LABELS = {"searchable": SEARCHABLE_LABEL, "use": USE_LABEL, "decision": DECISION_LABEL, "kind": ITEM_KIND_LABEL,
+          "register": REGISTER_LABEL, "human_stages": list(ops.HUMAN_STAGES)}
 
 
 class WriteApp:
-    def __init__(self, wd: WorkDir, rewriter: Callable[[], Provider] | None = None, poll_seconds: float = 3.0) -> None:
+    def __init__(self, wd: WorkDir, rewriter: Callable[[], Provider] | None, poll_seconds: float) -> None:
         self.wd = wd
         self.rewriter = rewriter
         self.poll_seconds = poll_seconds
@@ -55,14 +70,16 @@ class WriteApp:
             message = message.replace(root + os.sep, "").replace(root, ".")
         return message
 
-    def final(self, name: str) -> dict:
-        name = self.draft_name(name)
-        out = final_name(name)
+    def _final(self, ctx: ReviewContext) -> dict:
+        out = final_name(ctx.draft)
         if not self.wd.is_plain_file(out):
             raise KeyError(out)
         text = self.wd.read(out)
-        changes = final_changes(self.wd.read(name), text, load_review(self.wd, name))
-        return {"draft": name, "final": out, "markdown": text, "html": render(text)[0], "changes": changes}
+        return {"draft": ctx.draft, "final": out, "markdown": text, "html": render(text)[0],
+                "changes": final_changes(ctx.src, text, ctx.review)}
+
+    def final(self, name: str) -> dict:
+        return self._final(ReviewContext.load(self.wd, self.draft_name(name)))
 
     def download(self, name: str) -> tuple[str, bytes]:
         name = self.draft_name(name)
@@ -71,23 +88,20 @@ class WriteApp:
             raise KeyError(out)
         return download_name(self.wd, name), self.wd.read(out).encode()
 
+    def _review(self, ctx: ReviewContext, with_html: bool = True) -> dict:
+        checked = bool(ctx.review.items) or any((self.wd.root / f"{check_stem(ctx.draft, s)}.json").exists()
+                                               for s in (False, True))
+        return ({"html": render(ctx.src)[0]} if with_html else {}) | {
+            "draft": ctx.draft, "items": [i.model_dump() for i in ctx.review.items], "dirty": ctx.needs_apply(),
+            "used": read_used(self.wd, ctx.draft), "checked": checked, "version": ops.version(self.wd)}
+
     def review(self, name: str) -> dict:
-        name = self.draft_name(name)
-        ctx = ReviewContext.load(self.wd, name)
-        rev = ctx.review
-        html, _ = render(ctx.src)
-
-        return {"draft": name, "html": html, "items": [i.model_dump() for i in rev.items], "dirty": ctx.needs_apply(),
-                "used": read_used(self.wd, name),
-                "checked": bool(rev.items) or any((self.wd.root / f).exists() for f in self._check_files(name))}
-
-    def _check_files(self, name: str) -> list[str]:
-        return [f"{check_stem(name, s)}.json" for s in (False, True)]
+        return self._review(ReviewContext.load(self.wd, self.draft_name(name)))
 
     def save_review(self, name: str, body: dict) -> dict:
         name = self.draft_name(name)
-        ops.decide(self.wd, name, body, SOURCE)
-        return self.review(name)
+        rev = ops.decide(self.wd, name, body, SOURCE)
+        return self._review(ReviewContext(self.wd, name, self.wd.read(name), rev), with_html=False)
 
     def apply(self, name: str) -> dict:
         name = self.draft_name(name)
@@ -95,21 +109,25 @@ class WriteApp:
             ctx = ReviewContext.load(self.wd, name)
             res = ops.apply(self.wd, name, self.rewriter() if ctx.needs_rewrite_call() and self.rewriter else None, SOURCE,
                             ctx=ctx)
-        return res.model_dump()
+            after = ReviewContext.load(self.wd, name)
+        return {"result": res.model_dump(), "review": self._review(after, with_html=False), "final": self._final(after)}
 
     def confirm(self, body: dict) -> dict:
         handoff = ops.confirm(self.wd, SOURCE, str(body.get("note", "")), self.rewriter)
         return {"handoff": handoff} | self.state()
 
-    def version(self) -> dict:
-        return {"version": ops.version(self.wd)} | ops.stage_info(self.wd)
+    def version(self) -> str:
+        return ops.version(self.wd)
+
+    def stage(self) -> dict:
+        return ops.stage_info(self.wd)
 
     def state(self) -> dict:
         wd = self.wd
         units = wd.units()
         design = sync_design(wd.design(), units) if wd.design_file.exists() else None
         return {"project": wd.project().model_dump(), "version": ops.version(wd), "stage": ops.stage_info(wd),
-                "poll_seconds": self.poll_seconds,
+                "poll_seconds": self.poll_seconds, "labels": LABELS,
                 "units": [u.model_dump() | {"firsthand": u.firsthand} for u in units],
                 "interview": wd.interview().model_dump() if wd.interview_file.exists() else None,
                 "design": design.model_dump() if design else None,
@@ -127,50 +145,52 @@ class WriteApp:
         return self.state()
 
 
-MAX_BODY = 2 * 1024 * 1024
-TOKEN_HEADER = "X-Kumimasu-Token"
-TOKEN_SLOT = b"{{KUMIMASU_TOKEN}}"
-SECURITY_HEADERS = {
-    "X-Frame-Options": "DENY",
-    "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                               "style-src 'self' 'unsafe-inline'; img-src 'self' data:",
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-}
-
-
 class HttpError(Exception):
     def __init__(self, code: int, message: str) -> None:
         super().__init__(message)
         self.code = code
 
 
+ERRORS: tuple[tuple[tuple[type[Exception], ...], int], ...] = (
+    ((KeyError,), 404),
+    ((StepError,), 409),
+    ((ValueError, TypeError, ValidationError, LLMError), 400),
+)
+
+
 def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
     page = resources.files("kumimasu").joinpath("index.html").read_bytes().replace(TOKEN_SLOT, token.encode())
+    exact = {("GET", "/api/drafts"): lambda body: app.drafts(),
+             ("GET", "/api/state"): lambda body: app.state(),
+             ("POST", "/api/confirm"): app.confirm,
+             ("PUT", "/api/interview"): app.save_answers,
+             ("PUT", "/api/design"): app.save_design}
+    named = {("GET", "review"): lambda name, body: app.review(name),
+             ("PUT", "review"): app.save_review,
+             ("GET", "final"): lambda name, body: app.final(name),
+             ("POST", "apply"): lambda name, body: app.apply(name)}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
 
-        def _send(self, code: int, body: bytes, ctype: str, headers: dict | None = None) -> None:
+        def _send(self, code: int, body: bytes, ctype: str | None, headers: dict | None = None) -> None:
             self.send_response(code)
             for k, v in (SECURITY_HEADERS | (headers or {})).items():
                 self.send_header(k, v)
-            self.send_header("Content-Type", ctype)
+            if ctype is not None:
+                self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
-        def _json(self, data, code: int = 200) -> None:
-            self._send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
-
-        def _origins(self) -> set[str]:
-            port = self.server.server_address[1]
-            return {f"{HOST}:{port}", f"localhost:{port}"}
+        def _json(self, data, code: int = 200, headers: dict | None = None) -> None:
+            self._send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8", headers)
 
         def _check(self, path: str) -> None:
-            hosts = self._origins()
+            port = self.server.server_address[1]
+            hosts = {f"{HOST}:{port}", f"localhost:{port}"}
             if self.headers.get("Host") not in hosts:
                 raise HttpError(421, "Host が違います")
             origin = self.headers.get("Origin")
@@ -198,81 +218,52 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 raise HttpError(400, "本文は JSON のオブジェクトにしてください")
             return data
 
+        def _route(self, method: str, path: str) -> None:
+            if method == "GET" and path in ("/", "/index.html"):
+                self._send(200, page, "text/html; charset=utf-8")
+                return
+            if method == "GET" and path == "/api/version":
+                v = app.version()
+                etag = {"ETag": f'"{v}"'}
+                if self.headers.get("If-None-Match") == etag["ETag"]:
+                    self._send(304, b"", None, etag)
+                else:
+                    self._json({"version": v} | app.stage(), headers=etag)
+                return
+            parts = path.strip("/").split("/")
+            if method == "GET" and len(parts) == 3 and parts[:2] == ["api", "download"]:
+                fname, data = app.download(parts[2])
+                self._send(200, data, "text/markdown; charset=utf-8",
+                           {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
+                return
+            body = self._body() if method in ("POST", "PUT") else {}
+            if (handler := exact.get((method, path))) is not None:
+                self._json(handler(body))
+            elif len(parts) == 3 and parts[0] == "api" and (named_handler := named.get((method, parts[1]))) is not None:
+                self._json(named_handler(parts[2], body))
+            else:
+                raise KeyError(path)
+
         def _handle(self, method: str) -> None:
             path = urlparse(self.path).path
             try:
                 self._check(path)
-                getattr(self, f"_{method}")(path)
+                self._route(method, path)
             except HttpError as e:
                 self._json({"error": str(e)}, e.code)
-            except KeyError:
-                self._json({"error": "見つかりません"}, 404)
-            except StepError as e:
-                self._json({"error": app.public(str(e))}, 409)
-            except (ValueError, TypeError, ValidationError, LLMError) as e:
-                self._json({"error": app.public(str(e))}, 400)
-            except Exception:  # noqa: BLE001
-                self._json({"error": "サーバーの内部エラーです"}, 500)
+            except Exception as e:  # noqa: BLE001
+                code = next((c for kinds, c in ERRORS if isinstance(e, kinds)), 500)
+                message = "見つかりません" if code == 404 else app.public(str(e)) if code != 500 else "サーバーの内部エラーです"
+                self._json({"error": message}, code)
 
         def do_GET(self) -> None:
-            self._handle("get")
+            self._handle("GET")
 
         def do_POST(self) -> None:
-            self._handle("post")
+            self._handle("POST")
 
         def do_PUT(self) -> None:
-            self._handle("put")
-
-        def _get(self, path: str) -> None:
-            if path in ("/", "/index.html"):
-                self._send(200, page, "text/html; charset=utf-8")
-            elif path == "/api/drafts":
-                self._json(app.drafts())
-            elif (name := self._review_name(path)) is not None:
-                self._json(app.review(name))
-            elif (name := self._review_name(path, "final")) is not None:
-                self._json(app.final(name))
-            elif (name := self._review_name(path, "download")) is not None:
-                fname, body = app.download(name)
-                self._send(200, body, "text/markdown; charset=utf-8",
-                           {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
-            elif path == "/api/version":
-                v = app.version()
-                if self.headers.get("If-None-Match") == f'"{v["version"]}"':
-                    self.send_response(304)
-                    self.send_header("ETag", f'"{v["version"]}"')
-                    self.end_headers()
-                    return
-                self._send(200, json.dumps(v, ensure_ascii=False).encode(), "application/json; charset=utf-8",
-                           {"ETag": f'"{v["version"]}"'})
-            elif path == "/api/state":
-                self._json(app.state())
-            else:
-                raise KeyError(path)
-
-        def _review_name(self, path: str, prefix: str = "review") -> str | None:
-            parts = path.strip("/").split("/")
-            return parts[2] if len(parts) == 3 and parts[:2] == ["api", prefix] else None
-
-        def _post(self, path: str) -> None:
-            body = self._body()
-            if path == "/api/confirm":
-                self._json(app.confirm(body))
-            elif (name := self._review_name(path, "apply")) is not None:
-                self._json(app.apply(name))
-            else:
-                raise KeyError(path)
-
-        def _put(self, path: str) -> None:
-            body = self._body()
-            if (name := self._review_name(path)) is not None:
-                self._json(app.save_review(name, body))
-            elif path == "/api/interview":
-                self._json(app.save_answers(body))
-            elif path == "/api/design":
-                self._json(app.save_design(body))
-            else:
-                raise KeyError(path)
+            self._handle("PUT")
 
     return Handler
 

@@ -6,9 +6,11 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from .coverage import coverage_prompt, coverage_schema, parse_coverage
 from .design import sync_design
 from .factcheck import UrlStatus, extract_urls, firsthand_hits
 from .generate import DATA_NOTE_JA
+from .infounits import InfoUnit, as_info_units, info_units, units_block
 from .interview import unit_lines
 from .keep import KeepStore, text_hash
 from .llm import INT, STR, arr, ask_json, enum, obj, rows
@@ -16,14 +18,6 @@ from .metadiscourse import split_sentences
 from .model import Design, Unit
 from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
-from .payload import (
-    InfoUnit,
-    coverage_prompt,
-    coverage_schema,
-    info_units,
-    parse_coverage,
-    units_block,
-)
 from .surface import (
     GLUE,
     MIN_VOTES,
@@ -42,7 +36,7 @@ from .textutil import (
     overlaps,
     sentences,
 )
-from .workdir import WorkDir, as_info_units
+from .workdir import WorkDir
 
 if TYPE_CHECKING:
     from .llm import Provider

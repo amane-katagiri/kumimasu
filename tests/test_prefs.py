@@ -93,7 +93,7 @@ def test_used_settings_are_recorded_shown_and_handed_over(cwd):
     ops.confirm(w, "agent")
     from kumimasu.server import WriteApp
 
-    assert WriteApp(w).review("draft.md")["used"] == used
+    assert WriteApp(w, None, 3).review("draft.md")["used"] == used
     h = ops.confirm(w, "agent-chat")
     assert h["used"] == used
 

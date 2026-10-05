@@ -16,9 +16,9 @@ from pydantic import BaseModel
 from .check import CheckReport, check_stem, dash_hits
 from .files import atomic_write, create_new, dump_yaml
 from .generate import DATA_NOTE_JA
+from .infounits import info_units
 from .keep import KeepStore, text_hash
 from .llm import ask_replacements
-from .payload import info_units
 from .surface import SURFACE_CATEGORIES
 from .textutil import apply_edits, code_ranges, locate, norm, overlaps, paragraph_at
 from .workdir import WorkDir, check_draft_name, now
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
     from .llm import Provider
 
 Decision = Literal["", "keep", "delete", "rewrite"]
+DECISION_LABEL = {"": "未決", "keep": "残す", "delete": "削る", "rewrite": "書き直す"}
+ITEM_KIND_LABEL = {"meta": "メタ言説", "glue": "つなぎの効用文", "lint": "表記", "drop": "書かないはずの事柄",
+                   "fabrication": "材料に無い体験", "number": "出典の無い数値", "link": "開けないリンク",
+                   "user": "自分で足した項目"}
 
 
 class Rewrite(BaseModel):

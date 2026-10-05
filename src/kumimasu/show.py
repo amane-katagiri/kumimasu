@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from . import ops
 from .design import sync_design
-from .review import ReviewContext, final_name
+from .model import USE_LABEL
+from .review import DECISION_LABEL, ReviewContext, final_name
 from .textutil import excerpt
 from .workdir import WorkDir
 
@@ -68,7 +69,7 @@ def text(snap: dict) -> str:
         lines.append(f"ねらい: {d['purpose']}")
         lines += [f"持ち帰り {i}: {t}" for i, t in enumerate(d["takeaways"], 1)]
         lines.append(f"目標の字数: {d['target_length']}" + (f"  順番: {' / '.join(d['order'])}" if d["order"] else ""))
-        for use, label in (("deep", "掘り下げる"), ("mention", "触れる"), ("drop", "書かない")):
+        for use, label in USE_LABEL.items():
             us = d["units"][use]
             lines.append(f"{label} {len(us)}: " + ", ".join(f"{u['id']}「{u['text']}」" for u in us[:12])
                          + (" …" if len(us) > 12 else ""))
@@ -86,7 +87,7 @@ def text(snap: dict) -> str:
                      + ("  ※決定が反映より新しい" if r["needs_apply"] and r["final"] else ""))
         for i in r["items"]:
             tag = f"{i['kind']}" + (f"/{i['category']}" if i["category"] else "") + (f" {i['votes']}" if i["votes"] else "")
-            dec = {"": "未決", "keep": "残す", "delete": "削る", "rewrite": "書き直す"}[i["decision"]]
+            dec = DECISION_LABEL[i["decision"]]
             extra = ""
             if i["decision"] == "rewrite":
                 extra = f" → {i['rewrite']['result']}（{i['rewrite']['source']}・固定）" if i["rewrite"] else "（未生成）"

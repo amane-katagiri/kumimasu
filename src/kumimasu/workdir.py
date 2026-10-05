@@ -11,14 +11,12 @@ from pydantic import BaseModel
 
 from .errors import StepError
 from .files import atomic_write, create_new, dump_yaml
+from .infounits import parse_material
 from .model import Design, Interview, Project, Unit
-from .payload import InfoUnit, info_units
 
 T = TypeVar("T", bound=BaseModel)
 
 DRAFT_NAME = re.compile(r"^draft[\w.\-]*\.md$")
-PROSE_SUFFIXES = {".md", ".markdown", ".txt", ".text", ""}
-CODE_CHUNK_LINES = 40
 
 
 def check_draft_name(name: str) -> str:
@@ -31,23 +29,6 @@ def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def code_units(text: str) -> list[tuple[str, str]]:
-    lines = text.rstrip("\n").splitlines()
-    out = []
-    for i in range(0, len(lines), CODE_CHUNK_LINES):
-        chunk = "\n".join(lines[i:i + CODE_CHUNK_LINES])
-        if chunk.strip():
-            out.append(("code", chunk))
-    return out
-
-
-def parse_material(path: Path) -> list[InfoUnit | tuple[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if path.suffix.lower() in PROSE_SUFFIXES:
-        return list(info_units(text))
-    return code_units(text)
-
-
 class WorkDir:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
@@ -56,15 +37,30 @@ class WorkDir:
         self.units_file = self.root / "units.yaml"
         self.interview_file = self.root / "interview.yaml"
         self.material_dir = self.root / "material"
+        self._project: tuple[tuple[int, int, int], Project] | None = None
+
+    def _yaml(self, path: Path, step: str):
+        if not path.exists():
+            raise StepError(f"{path.name} がありません。先に `kumimasu {step}` を実行してください")
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
 
     def _load(self, path: Path, model: type[T], step: str) -> T:
-        if not path.exists():
-            raise StepError(f"{path} がありません。先に `kumimasu {step}` を実行してください")
-        return model.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        return model.model_validate(self._yaml(path, step) or {})
 
     @property
     def round(self) -> int:
         return self.project().round if self.project_file.exists() else 1
+
+    def project(self) -> Project:
+        try:
+            st = self.project_file.stat()
+        except FileNotFoundError:
+            self._project = None
+            return self._load(self.project_file, Project, "init")
+        key = (st.st_mtime_ns, st.st_size, st.st_ino)
+        if self._project is None or self._project[0] != key:
+            self._project = (key, self._load(self.project_file, Project, "init"))
+        return self._project[1].model_copy(deep=True)
 
     def suffix(self, round_: int | None = None) -> str:
         n = self.round if round_ is None else round_
@@ -84,13 +80,8 @@ class WorkDir:
         except ValueError as e:
             raise StepError(f"project.yaml の review_draft が使えません: {e}") from None
 
-    def project(self) -> Project:
-        return self._load(self.project_file, Project, "init")
-
     def material_units(self) -> list[Unit]:
-        if not self.units_file.exists():
-            raise StepError(f"{self.units_file} がありません。先に `kumimasu init` を実行してください")
-        return [Unit.model_validate(u) for u in yaml.safe_load(self.units_file.read_text(encoding="utf-8")) or []]
+        return [Unit.model_validate(u) for u in self._yaml(self.units_file, "init") or []]
 
     def interview(self) -> Interview:
         return self._load(self.interview_file, Interview, "interview")
@@ -109,6 +100,7 @@ class WorkDir:
 
     def save_project(self, p: Project) -> None:
         atomic_write(self.project_file, dump_yaml(p.model_dump()))
+        self._project = None
 
     def save_units(self, units: list[Unit]) -> None:
         atomic_write(self.units_file, dump_yaml([u.model_dump(exclude_defaults=True) for u in units]))
@@ -156,8 +148,7 @@ def init_workdir(root: Path, project: Project, materials: list[Path]) -> tuple[W
     units: list[Unit] = []
     for name in names:
         for u in parse_material(wd.material_dir / name):
-            kind, text, section = (u.kind, u.text, u.section) if isinstance(u, InfoUnit) else (u[0], u[1], "")
-            units.append(Unit(id=f"m{len(units) + 1}", source=name, kind=kind, section=section, text=text))
+            units.append(Unit(id=f"m{len(units) + 1}", source=name, kind=u.kind, section=u.section, text=u.text))
     wd.save_project(project.model_copy(update={"materials": names, "created_at": now()}))
     wd.save_units(units)
     return wd, units
@@ -178,12 +169,3 @@ def merge_clusters(units: list[Unit]) -> list[Unit]:
                                      "found_in": sorted({*u.found_in, *(x for m in ms for x in m.found_in)})})
         out.append(u)
     return out
-
-
-def as_info_units(units: list[Unit]) -> tuple[list[InfoUnit], dict[int, str]]:
-    infos, ids = [], {}
-    for i, u in enumerate(units, 1):
-        infos.append(InfoUnit(id=i, kind=u.kind if u.kind in ("prose", "quote", "item", "row", "code") else "prose",
-                              text=u.text, start=0, end=0, section=u.section))
-        ids[i] = u.id
-    return infos, ids

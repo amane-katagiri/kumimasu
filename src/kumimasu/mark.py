@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .coverage import coverage_prompt, coverage_schema, parse_coverage
 from .generate import (
     DATA_NOTE_JA,
     OUTPUT_FORMAT_JA,
@@ -9,11 +10,11 @@ from .generate import (
     WEB_RULES_JA,
     article_from,
 )
+from .infounits import as_info_units
 from .interview import unit_lines
 from .llm import STR, arr, ask_json, obj
 from .model import Project, Unit
-from .payload import coverage_prompt, coverage_schema, parse_coverage
-from .workdir import WorkDir, as_info_units
+from .workdir import WorkDir
 
 if TYPE_CHECKING:
     from .llm import Provider

@@ -69,7 +69,7 @@ def write_report(wd: WorkDir, rep: CheckReport, name: str = "check.json") -> Non
 
 
 def standard_report(wd: WorkDir) -> CheckReport:
-    from kumimasu.payload import info_units
+    from kumimasu.infounits import info_units
 
     last = next(u for u in info_units(DRAFT) if u.text.startswith("最後の段落"))
     rep = report(
@@ -204,9 +204,15 @@ def test_server_final_check_round_trip(wd):
         meta = next(i for i in r["items"] if i["kind"] == "meta")
         code, r = c.put("/api/review/draft.md", {"items": [{"id": meta["id"], "decision": "delete"}]})
         assert code == 200 and next(i for i in r["items"] if i["id"] == meta["id"])["decision"] == "delete"
+        assert r["version"] == c.get("/api/version")[1]["version"] and "html" not in r
+        a = DRAFT.index("最後の段落")
+        code, r = c.put("/api/review/draft.md", {"items": [{"start": a, "end": a + 5, "decision": "keep"}]})
+        assert code == 200 and any(i["kind"] == "user" and i["id"].startswith("user-") for i in r["items"])
         assert yaml.safe_load(review_path(wd, "draft.md").read_text(encoding="utf-8"))["items"]
         code, r = c.post("/api/apply/draft.md")
-        assert code == 200 and r["out"] == "draft.final.md" and r["deleted"] == 1 and r["calls"] == 0
+        res = r["result"]
+        assert code == 200 and res["out"] == "draft.final.md" and res["deleted"] == 1 and res["calls"] == 0
+        assert r["review"]["dirty"] is False and "見ていきます" not in r["final"]["markdown"]
         assert c.get("/api/drafts")[1]["drafts"] == [{"name": "draft.md", "final": "draft.final.md"}]
         code, f = c.get("/api/final/draft.md")
         assert code == 200 and f["final"] == "draft.final.md" and "見ていきます" not in f["markdown"] and "data-s" in f["html"]
