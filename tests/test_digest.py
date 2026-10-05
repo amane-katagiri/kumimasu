@@ -43,8 +43,8 @@ def digest_fake(invent: bool = True):
         memos = []
         for sec in prompt.split("\n## 節: ")[1:]:
             path = sec.split("\n", 1)[0]
-            ids = re.findall(r"^\[(m\d+)\]（(?:散文|項目|引用)）", sec, re.MULTILINE)
-            texts = dict(re.findall(r"^\[(m\d+)\]（[^）]+）\n(.+)$", sec, re.MULTILINE))
+            ids = re.findall(r"^\[(r\d+)\]（(?:散文|項目|引用)）", sec, re.MULTILINE)
+            texts = dict(re.findall(r"^\[(r\d+)\]（[^）]+）\n(.+)$", sec, re.MULTILINE))
             keep = ids[:-1] if path.endswith("1.1 結果") else ids
             for a in range(0, len(keep), 2):
                 pair = keep[a:a + 2]
@@ -82,16 +82,16 @@ def test_digest_writes_self_contained_units_and_archives(tmp_path, dense):
     assert res.calls == len(p.calls) and res.calls < 41 and len(units) < len(raw)
     assert all(u.origin == "digest" and u.from_units for u in units)
     memo = units[0]
-    assert memo.from_units == ["m1", "m2"] and memo.path == raw[0].path and "1.1 結果 の実験で" in memo.text
+    assert memo.from_units == ["r1", "r2"] and memo.path == raw[0].path and "1.1 結果 の実験で" in memo.text
     assert not any("999" in u.text or "無い単位から" in u.text for u in units)
-    left = next(u for u in units if u.from_units == [raw[7].id])
+    left = next(u for u in units if u.from_units == ["r" + raw[7].id[1:]])
     assert left.text == raw[7].text
     code = next(u for u in units if u.kind == "code")
     row = next(u for u in units if u.kind == "row")
     assert code.text == "run --all" and row.text == "条件: A / 値: 12.5" and len(code.from_units) == 1
     assert [u.id for u in units] == [f"m{i}" for i in range(1, len(units) + 1)]
     saved = yaml.safe_load(w.units_file.read_text(encoding="utf-8"))
-    assert saved[0]["from"] == ["m1", "m2"] and saved[0]["origin"] == "digest"
+    assert saved[0]["from"] == ["r1", "r2"] and saved[0]["origin"] == "digest"
     st = w.project().digest
     assert st.done_at and st.units_before == len(raw) and st.units_after == len(units)
     assert "書き直し済み" in show_text(snapshot(w))
@@ -124,8 +124,8 @@ def test_mark_and_interview_after_digest(tmp_path, dense):
         code, state = c.get("/api/state")
         assert code == 200 and state["project"]["digest"]["done_at"]
         first = state["units"][0]
-        assert first["from"] == ["m1", "m2"] and first["path"].startswith("dense.md › ")
-        assert set(first["from"]) <= set(state["originals"]) and state["originals"]["m1"]["text"].startswith("条件 0")
+        assert first["from"] == ["r1", "r2"] and first["path"].startswith("dense.md › ")
+        assert set(first["from"]) <= set(state["originals"]) and state["originals"]["r1"]["text"].startswith("条件 0")
         code, page = c.get("/")
         assert "digest-note" in page and "書き直す前の単位" in page
 

@@ -99,7 +99,7 @@ DIGEST_PROMPT_JA = DATA_NOTE_JA + """
 - コード（```）と表の行は書き直しません。文脈として読むだけにして、from にも入れません。
 - メモは 1 つ 80–300 字くらいにします。短い単位はまとめ、長い単位は事柄ごとに分けて構いません。
 
-{{"memos": [{{"from": ["m12", "m13"], "text": "…"}}]}} の形の JSON で答えてください。
+{{"memos": [{{"from": ["r12", "r13"], "text": "…"}}]}} の形の JSON で答えてください。
 
 # 文書（{source}）
 
@@ -219,8 +219,12 @@ def digest_units(raw: list[Unit], prose_files: set[str], provider: Provider) -> 
     return DigestResult(units=units, before=len(raw), calls=len(todo), memos=memos, kept=len(units) - memos)
 
 
+RAW_PREFIX = "r"
+
+
 def plain(u: Unit) -> Unit:
-    return u.model_copy(update={"searchable": None, "found_in": [], "cluster": "", "members": []})
+    return u.model_copy(update={"id": RAW_PREFIX + u.id.lstrip("m"), "searchable": None, "found_in": [], "cluster": "",
+                                "members": []})
 
 
 def digest(wd: WorkDir, provider: Provider, force: bool = False) -> DigestResult:
