@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
-
-
-if TYPE_CHECKING:
-    pass
 
 CATEGORIES: dict[str, str] = {
     "signpost": "道しるべ。先の展開や結論の位置を予告・確認するだけの文（「先に結論を述べます」「以下では〜を見ていきます」"
@@ -91,7 +86,6 @@ def sentences(text: str) -> list[str]:
 
 
 def split_units(markdown: str) -> list[Unit]:
-    """Prose sentences and headings with their unit section (-1 before the first section heading). Code, tables and quotes are skipped."""
     level = section_level(markdown)
     units: list[Unit] = []
     section, heading = -1, ""

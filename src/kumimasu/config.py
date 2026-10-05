@@ -1,10 +1,5 @@
-"""Layered settings for kumimasu.
-
-Highest first: command-line options > the work directory's project.yaml `config:` > ./kumimasu.yaml in the current
-directory > the user file ($KUMIMASU_CONFIG, else ~/.config/kumimasu/config.yaml) > the packaged defaults.
-Relative paths resolve against the directory of the file that sets them. Nothing here creates files except
-`init_template`, which only runs when asked.
-"""
+"""Highest first: command-line options > the work directory's project.yaml `config:` > ./kumimasu.yaml in the current
+directory > the user file ($KUMIMASU_CONFIG, else ~/.config/kumimasu/config.yaml) > the packaged defaults."""
 from __future__ import annotations
 
 import os
@@ -131,8 +126,6 @@ class Config:
                 for layer in self.layers for key in layer.ignored]
 
     def rules_path(self) -> Path | None:
-        """The rules file to use, or None for the packaged default rules. The default location is optional;
-        a file named explicitly in some config must exist."""
         value, layer = self._pick("rules_file")
         if value is None:
             return None

@@ -1,5 +1,3 @@
-"""Bring what an article's design changed back into the defaults: writing rules (the rules file) and the other
-preferences (config keys under `defaults:`). Nothing is written unless asked, scope by scope and item by item."""
 from __future__ import annotations
 
 import difflib
@@ -23,8 +21,6 @@ def _layer_value(cfg: Config, name: str, key: str):
 
 
 def rules_target(scope: str, cwd: Path, create: bool) -> tuple[Path, list[str]]:
-    """The rules file a scope writes to. With create, a project without a rules file gets
-    `rules_file: kumimasu.rules.yaml` in ./kumimasu.yaml, and a missing file is seeded from the packaged rules."""
     if scope not in SCOPES:
         raise ValueError(f"--scope must be one of {', '.join(SCOPES)}")
     cfg = load(None, cwd)
@@ -90,8 +86,6 @@ class Diff(BaseModel):
 
 
 def rules_diff(wd: WorkDir) -> list[Diff]:
-    """This article's design rules against the effective defaults: added, removed, edited (a replaced rule),
-    disabled and enabled."""
     cfg = load(wd.root)
     base = default_rules(cfg.rules_path())
     mine = wd.design().rules
@@ -151,8 +145,6 @@ def rules_save(wd: WorkDir, scope: str, only: list[str], cwd: Path) -> tuple[Pat
 
 
 def prefs_diff(wd: WorkDir) -> list[Diff]:
-    """What this article's design changed relative to the `defaults:` settings, in ways that could generalize.
-    Avoid topics the design step proposed for this article are left out; topics the person added are listed."""
     cfg = load(wd.root)
     d = wd.design()
     out: list[Diff] = []
@@ -193,7 +185,6 @@ def _set(data: dict, key: str, value) -> None:
 
 
 def write_config_values(path: Path, values: dict) -> None:
-    """Set keys in a config file. The leading comment block is kept; the rest is rewritten as plain YAML."""
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     head = []
     for line in text.splitlines():

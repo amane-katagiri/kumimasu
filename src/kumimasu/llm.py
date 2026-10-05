@@ -35,7 +35,7 @@ def extract_json(text: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    if m := re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.S):
+    if m := re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL):
         return json.loads(m[1])
     start = min((i for i in (text.find("{"), text.find("[")) if i >= 0), default=-1)
     if start < 0:
@@ -84,7 +84,7 @@ class FakeProvider:
             return out
         if isinstance(r, dict):
             for pattern, answer in r.items():
-                if re.search(pattern, prompt, re.S):
+                if re.search(pattern, prompt, re.DOTALL):
                     return answer
         return self.default
 
@@ -101,6 +101,7 @@ class ClaudeCliProvider:
 
     def command(self, system: str | None = None) -> list[str]:
         tools = ",".join(self.allowed_tools)
+        # Keeps the user's CLAUDE.md, hooks, plugins and MCP servers (persona, memory) out of these calls.
         cmd = [self.executable, "-p", "--output-format", "json", "--model", self.model, "--tools", tools,
                "--setting-sources", "", "--safe-mode", "--strict-mcp-config", "--disable-slash-commands",
                "--no-session-persistence"]

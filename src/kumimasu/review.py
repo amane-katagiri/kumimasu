@@ -11,14 +11,13 @@ from typing import TYPE_CHECKING, Literal
 import yaml
 from pydantic import BaseModel
 
+from .check import KEEP_FILE, CheckReport, check_stem, dash_hits, load_keep, text_hash
+from .files import atomic_write, create_new
 from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .parts.markdown import parse as parse_parts
 from .payload import info_units
 from .surface import SURFACE_CATEGORIES
-from .check import KEEP_FILE, CheckReport, check_stem, dash_hits, load_keep, text_hash
-from .files import atomic_write
-from .files import create_new
 from .workdir import WorkDir, check_draft_name, dump_yaml, now
 
 if TYPE_CHECKING:
@@ -90,7 +89,6 @@ def _runs(detail: str) -> int | None:
 
 
 def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str]) -> list[Item]:
-    """Findings that point at text in the draft, with source offsets (None when they cannot be placed)."""
     out: dict[str, Item] = {}
     dunits = info_units(src)
     dashes = {norm(x) for x in dash_hits(src)}
@@ -158,7 +156,6 @@ def review_path(wd: WorkDir, draft: str):
 
 
 def load_review(wd: WorkDir, draft: str) -> Review:
-    """Items from the current check results, with saved decisions and the user's own items merged in."""
     src = wd.read(draft)
     path = review_path(wd, draft)
     saved = Review.model_validate(yaml.safe_load(path.read_text(encoding="utf-8"))) if path.exists() else Review(draft=draft)
@@ -234,8 +231,6 @@ def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Rev
 
 
 def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
-    """Apply one item from the page or the CLI: decision and note; a changed result becomes the user's own (locked)
-    result; regenerate clears the result so only this item is rewritten on the next apply."""
     before = (it.decision, it.note, it.rewrite)
     decision = x.get("decision", it.decision)
     if decision not in ("", "keep", "delete", "rewrite"):
@@ -253,7 +248,6 @@ def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
 
 
 def update_keep(wd: WorkDir, rev: Review) -> None:
-    """Sentences marked 残す are remembered by text hash; un-marking one in this review forgets it."""
     p = wd.root / KEEP_FILE
     rows = {r["hash"]: r for r in (yaml.safe_load(p.read_text(encoding="utf-8")) or [])} if p.exists() else {}
     for it in rev.items:
@@ -271,7 +265,6 @@ _EMPTY_LINE = re.compile(r"\s*(#{1,6}|[-*+]|\d+[.)]|>)?\s*")
 
 
 def _cleanup_at(text: str, at: int) -> str:
-    """Tidy only the line an edit touched: drop it if nothing but a marker is left, else close the gap."""
     ls = text.rfind("\n", 0, at) + 1
     le = text.find("\n", at)
     le = len(text) if le < 0 else le
@@ -304,7 +297,6 @@ def _collapse_blank_lines(text: str) -> str:
 
 
 def apply_edits(src: str, edits: list[tuple[int, int, str]]) -> str:
-    """Replace spans from the end backwards (overlaps and code blocks are skipped), tidying each touched line."""
     code = code_ranges(src)
     taken: list[tuple[int, int]] = []
     text = src
@@ -315,10 +307,6 @@ def apply_edits(src: str, edits: list[tuple[int, int, str]]) -> str:
         text = text[:a] + new + text[b:]
         text = _cleanup_at(text, a + len(new) if new else a)
     return _collapse_blank_lines(text)
-
-
-def delete_spans(src: str, spans: list[tuple[int, int]]) -> str:
-    return apply_edits(src, [(a, b, "") for a, b in spans])
 
 
 REWRITE_PROMPT_JA = DATA_NOTE_JA + """
@@ -445,11 +433,10 @@ def require_base(name: str) -> None:
 
 
 def download_name(wd: WorkDir, base: str, stamp: datetime | None = None) -> str:
-    return f"{wd.root.resolve().name}-{base.removesuffix('.md')}-{(stamp or datetime.now()).strftime('%Y%m%d-%H%M')}.md"
+    return f"{wd.root.resolve().name}-{base.removesuffix('.md')}-{(stamp or datetime.now().astimezone()).strftime('%Y%m%d-%H%M')}.md"
 
 
 def export_final(wd: WorkDir, base: str, to_dir: Path, stamp: datetime | None = None) -> Path:
-    """Copy <base>.final.md to <to_dir>/<workdir>-<base stem>-<YYYYmmdd-HHMM>.md, never overwriting."""
     require_base(base)
     src = wd.root / final_name(base)
     if not src.is_file():
@@ -472,8 +459,6 @@ def needs_rewrite_call(wd: WorkDir, draft: str, regenerate: tuple[str, ...] = ()
 
 
 def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate: tuple[str, ...] = ()) -> ApplyResult:
-    """Deletions are deterministic. A rewrite item with a stored result reuses it (locked); only items without one
-    (or listed in regenerate) go to the provider, in one call. Stale items are left out and reported."""
     require_base(draft)
     src = wd.read(draft)
     rev = load_review(wd, draft)

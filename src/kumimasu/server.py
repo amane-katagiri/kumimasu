@@ -11,10 +11,9 @@ from urllib.parse import quote, urlparse
 
 from pydantic import ValidationError
 
-from .errors import LLMError
 from . import ops
 from .design import sync_design
-from .errors import StepError
+from .errors import LLMError, StepError
 from .workdir import DRAFT_NAME, WorkDir
 
 if TYPE_CHECKING:
@@ -122,7 +121,7 @@ class WriteApp:
     def save_answers(self, body: dict) -> dict:
         answers = body.get("answers")
         if not isinstance(answers, dict):
-            raise ValueError("answers must be an object")
+            raise TypeError("answers はオブジェクトにしてください")
         ops.save_answers(self.wd, answers, SOURCE)
         return self.state()
 

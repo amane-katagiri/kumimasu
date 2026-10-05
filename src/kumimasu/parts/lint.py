@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from markdown_it import MarkdownIt
 
@@ -11,8 +11,7 @@ EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿⌀-⏿️]")
 DECOR_LEAD = re.compile(r"^\s*([✅❌⭕✔✖⚠💡📌👉※→⇒★☆■□●○◆◇▶►▷]|⭐)")
 BOLD = re.compile(r"\*\*[^*\n]+?\*\*|__[^_\n]+?__")
 BOLD_LEAD = re.compile(r"^\s*(\*\*[^*\n]+?\*\*|__[^_\n]+?__)\s*([:：]|$|\s*[-–—]\s)")
-COLON_LEAD = re.compile(r"^\s*(\*\*)?[^\s。、:：*]{1,20}(\*\*)?[:：]\s*")
-CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.S)
+CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.DOTALL)
 _inline = MarkdownIt("commonmark")
 _CJK = re.compile(r"[　-ヿ㐀-鿿＀-￯]")
 
@@ -33,11 +32,12 @@ def plain(text: str) -> str:
     return re.sub(r"(?<=(.))\n(?=(.))", lambda m: "" if _CJK.match(m[1]) and _CJK.match(m[2]) else " ", joined).strip()
 
 
+MAX_BOLD_PER_KCHAR = 3.0
+
+
 @dataclass
 class Finding:
     rule: str
-    part: str
-    path: str
     excerpt: str
 
 
@@ -51,8 +51,7 @@ def _text_parts(doc: PartDoc) -> list[tuple[Part, Part | None]]:
     return out
 
 
-def lint(doc: PartDoc, max_bold_per_kchar: float = 3.0) -> dict:
-    paths = doc.paths()
+def lint(doc: PartDoc) -> list[Finding]:
     findings: list[Finding] = []
     bold = 0
     chars = 0
@@ -62,18 +61,12 @@ def lint(doc: PartDoc, max_bold_per_kchar: float = 3.0) -> dict:
         bold += len(BOLD.findall(text))
         excerpt = plain(p.text)[:40]
         if item is not None and item.children and item.children[0].id == p.id and BOLD_LEAD.match(text):
-            findings.append(Finding("bold-lead-item", item.id, paths[item.id], excerpt))
-        elif p.kind == "paragraph" and item is None and COLON_LEAD.match(text):
-            findings.append(Finding("colon-lead", p.id, paths[p.id], excerpt))
+            findings.append(Finding("bold-lead-item", excerpt))
         if EMOJI.search(text):
-            findings.append(Finding("emoji", p.id, paths[p.id], "".join(sorted(set(EMOJI.findall(text))))))
+            findings.append(Finding("emoji", "".join(sorted(set(EMOJI.findall(text))))))
         if any(DECOR_LEAD.match(ln) for ln in text.split("\n")):
-            findings.append(Finding("decor-symbol", p.id, paths[p.id], excerpt))
+            findings.append(Finding("decor-symbol", excerpt))
     density = round(1000 * bold / chars, 3) if chars else 0.0
-    if density > max_bold_per_kchar:
-        findings.append(Finding("bold-density", doc.root.id, "", f"{density}/1000 chars > {max_bold_per_kchar}"))
-    counts: dict[str, int] = {}
-    for f in findings:
-        counts[f.rule] = counts.get(f.rule, 0) + 1
-    return {"findings": [asdict(f) for f in findings], "counts": counts,
-            "stats": {"bold": bold, "chars": chars, "bold_per_kchar": density}}
+    if density > MAX_BOLD_PER_KCHAR:
+        findings.append(Finding("bold-density", f"{density}/1000 chars > {MAX_BOLD_PER_KCHAR}"))
+    return findings

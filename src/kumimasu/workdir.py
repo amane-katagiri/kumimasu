@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 
@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 from .errors import StepError
 from .files import atomic_write, create_new
-from .payload import InfoUnit, info_units
 from .model import Design, Interview, Project, Unit
+from .payload import InfoUnit, info_units
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -28,7 +28,7 @@ def check_draft_name(name: str) -> str:
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def dump_yaml(data) -> str:
@@ -82,7 +82,6 @@ class WorkDir:
         return f"draft{self.suffix(round_)}.md"
 
     def review_draft(self) -> str:
-        """The draft the final check works on: the one the agent handed over, else this round's first draft."""
         name = (self.project().review_draft if self.project_file.exists() else "") or self.draft_base()
         try:
             return check_draft_name(name)
@@ -110,7 +109,6 @@ class WorkDir:
                 for q in self.interview().questions if q.answer.strip()]
 
     def units(self) -> list[Unit]:
-        """Material units with duplicate clusters merged into their representative, then the answers."""
         return merge_clusters(self.material_units()) + self.answer_units()
 
     def save_project(self, p: Project) -> None:

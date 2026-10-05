@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from .glue import GLUE_RULE, material_grams, traceable
 from .generate import DATA_NOTE_JA
+from .glue import GLUE_RULE, material_grams, traceable
 from .llm import extract_json
 from .metadiscourse import CATEGORIES, LEADS, Unit, rule_hits, split_units
 
@@ -108,8 +108,6 @@ def rule_hints(units: list[Unit]) -> dict[str, str]:
 
 def detect_surface(markdown: str, provider: Provider, material: list[str] | None = None, runs: int = RUNS,
                    min_votes: int = MIN_VOTES) -> SurfaceReport:
-    """Meta-discourse and glue in one prompt, asked `runs` times; a unit is a hit when at least `min_votes` runs pick it.
-    The first two runs go in parallel and settle it when they agree; otherwise the rest run in parallel."""
     units = split_units(markdown)
     by_id = {u.id: u for u in units}
     hints = rule_hints(units)

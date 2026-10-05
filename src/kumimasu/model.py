@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -8,11 +8,11 @@ Kind = Literal["実用", "読み物", "調査"]
 Searchable = Literal["yes", "partial", "no"]
 Use = Literal["deep", "mention", "drop"]
 
-KINDS: tuple[str, ...] = ("実用", "読み物", "調査")
-USES: tuple[str, ...] = ("deep", "mention", "drop")
+KINDS: tuple[str, ...] = get_args(Kind)
+USES: tuple[str, ...] = get_args(Use)
 
 Stage = Literal["interview", "design", "drafting", "review", "done"]
-STAGES: tuple[str, ...] = ("interview", "design", "drafting", "review", "done")
+STAGES: tuple[str, ...] = get_args(Stage)
 SOURCES: tuple[str, ...] = ("human-ui", "agent-chat", "auto", "agent")
 
 
@@ -130,7 +130,7 @@ class Design(BaseModel):
         return next((u.use for u in self.units if u.id == unit_id), None)
 
     def live_conflicts(self) -> list[Conflict]:
-        """Conflicts whose drop unit is still drop and whose entailing units are still kept (uses may change after review)."""
+        """Uses may change after review."""
         out = []
         for c in self.conflicts:
             by = [b for b in c.by if self.use_of(b) in ("deep", "mention")]

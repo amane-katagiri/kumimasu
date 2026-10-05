@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from .check import dash_hits, load_keep, text_hash
 from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .surface import GLUE, MIN_VOTES, RUNS, detect_surface
-from .check import dash_hits, load_keep, text_hash
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -27,7 +27,6 @@ MAX_ROUNDS = 3
 
 
 class CountingProvider:
-    """Counts complete() calls and, under a cache, the ones that reached the model."""
 
     def __init__(self, inner: Provider) -> None:
         self.inner = inner
@@ -89,7 +88,6 @@ def _locate(text: str, sentence: str) -> re.Match | None:
 
 
 def apply_replacements(draft: str, flags: list[Flag], repl: dict[str, str]) -> tuple[str, list[dict], list[int]]:
-    """Returns the new text, a log per flag, and the offsets of the edits in the new text (before blank-line cleanup)."""
     log: list[dict] = []
     edits: list[int] = []
     for f in flags:
@@ -118,7 +116,6 @@ def tidy(text: str) -> str:
 
 
 def blocks(text: str) -> list[tuple[int, int]]:
-    """Blank-line separated blocks; fenced code stays in one block."""
     out, start, pos, fence = [], None, 0, False
     for line in text.splitlines(keepends=True):
         s = line.strip()
@@ -196,8 +193,6 @@ def find_flags(scope: str, full: str, provider: Provider, material: list[str], r
 
 def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, ...] = POLISH_RULES, apply: bool = False,
            runs: int = RUNS, min_votes: int = MIN_VOTES, max_rounds: int = MAX_ROUNDS, out: str | None = None) -> PolishResult:
-    """Majority-vote detection, then rewrite only the flagged sentences; re-detect on the edited paragraphs ± 1 until
-    nothing stable is left or max_rounds. Without apply, only the first detection is reported."""
     counter = CountingProvider(provider)
     start_misses = counter.misses
     material = [u.text for u in wd.units()]

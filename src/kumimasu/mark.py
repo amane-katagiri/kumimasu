@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .generate import DATA_NOTE_JA, Brief, research_generation_prompt, split_planned
-from .llm import extract_json
-from .payload import coverage_prompt, coverage_schema, parse_coverage, thin_brief
+from .generate import (
+    DATA_NOTE_JA,
+    OUTPUT_FORMAT_JA,
+    REGISTER_REQUEST_JA,
+    WEB_RULES_JA,
+    article_from,
+)
 from .interview import unit_lines
+from .llm import extract_json
 from .model import Project, Unit
+from .payload import coverage_prompt, coverage_schema, parse_coverage
 from .workdir import WorkDir, as_info_units
 
 if TYPE_CHECKING:
@@ -16,12 +22,10 @@ KIND_LABEL = {"実用": "実用的な技術ブログ記事", "読み物": "読�
 BASELINE = "W"
 
 
-def project_brief(p: Project) -> Brief:
-    return thin_brief(Brief(topic=p.topic, audience=p.audience, target_length=p.length, kind=KIND_LABEL[p.kind]))
-
-
 def baseline_prompt(p: Project) -> str:
-    return research_generation_prompt(project_brief(p), "plain")
+    return "\n\n".join([f"「{p.topic}」について、{p.audience}向けの{KIND_LABEL[p.kind]}を書いてください。\n\n"
+                         f"長さは{p.length}字くらいでお願いします。" + REGISTER_REQUEST_JA["keitai"],
+                         WEB_RULES_JA, OUTPUT_FORMAT_JA])
 
 
 def judge_searchable(units: list[Unit], baseline: str, judge: Provider) -> tuple[list[Unit], dict]:
@@ -83,7 +87,7 @@ def mark(wd: WorkDir, writer: Provider, judge: Provider, reuse_baseline: bool = 
     else:
         prompt = baseline_prompt(p)
         wd.write(f"baseline/{BASELINE}.prompt.md", prompt)
-        baseline = split_planned(writer.complete(prompt))[1]
+        baseline = article_from(writer.complete(prompt))
         wd.write(f"baseline/{BASELINE}.md", baseline)
     units, log = judge_searchable(wd.material_units(), baseline, judge)
     raw = judge.complete(cluster_prompt(units), json_schema=cluster_schema())

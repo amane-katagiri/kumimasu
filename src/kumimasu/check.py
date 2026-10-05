@@ -8,17 +8,32 @@ from typing import TYPE_CHECKING
 import yaml
 from pydantic import BaseModel
 
-from .factcheck import UrlStatus, check_urls, extract_urls, firsthand_hits
+from .design import sync_design
+from .factcheck import UrlStatus, extract_urls, firsthand_hits
 from .generate import DATA_NOTE_JA
+from .interview import unit_lines
 from .llm import extract_json
 from .metadiscourse import code_free_lines, sentences, split_units
+from .model import Design, Unit
 from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
-from .payload import InfoUnit, coverage_prompt, coverage_schema, info_units, parse_coverage, units_block
-from .surface import GLUE, MIN_VOTES, RUNS, SurfaceHit, SurfaceReport, detect_surface, rule_hints
-from .design import sync_design
-from .interview import unit_lines
-from .model import Design, Unit
+from .payload import (
+    InfoUnit,
+    coverage_prompt,
+    coverage_schema,
+    info_units,
+    parse_coverage,
+    units_block,
+)
+from .surface import (
+    GLUE,
+    MIN_VOTES,
+    RUNS,
+    SurfaceHit,
+    SurfaceReport,
+    detect_surface,
+    rule_hints,
+)
 from .workdir import WorkDir, as_info_units
 
 if TYPE_CHECKING:
@@ -47,8 +62,6 @@ class CheckReport(BaseModel):
     draft: str
     chars: int
     checks: list[Check]
-    presence: dict[str, str] = {}
-    space: dict[str, float] = {}
     sources: dict[int, list[str]] = {}
 
     def failed(self) -> list[Check]:
@@ -191,7 +204,7 @@ KEEP_FILE = "keep.yaml"
 
 
 def dash_hits(markdown: str) -> list[str]:
-    """Sentences using a dash as punctuation; dashes in code or quoted as the thing being discussed (「―」) do not count."""
+    """Dashes quoted as the thing being discussed (「―」) are not punctuation."""
     return [s for line in code_free_lines(markdown) if not line.lstrip().startswith(("|", "#"))
             for s in sentences(line) if _DASH.search(_DASH_IGNORE.sub("", s))]
 
@@ -308,8 +321,7 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
     checks.append(_c("length", f"字数 → 目標の ±{LENGTH_TOLERANCE:.0%}",
                      None if ratio is None else abs(ratio - 1) <= LENGTH_TOLERANCE,
                      None if ratio is None else round(ratio, 2), f"{chars} 字 / 目標 {d.target_length} 字"))
-    return CheckReport(draft="", chars=chars, checks=checks, presence=presence,
-                       space={k: round(v, 1) for k, v in space.items()}, sources=m.sources)
+    return CheckReport(draft="", chars=chars, checks=checks, sources=m.sources)
 
 
 def surface_hits(draft: str, units: list[Unit], meta: Provider | None, runs: int = RUNS,
@@ -335,8 +347,7 @@ def surface_checks(draft: str, units: list[Unit], meta: Provider | None, runs: i
            _c("glue", "材料の事実を運ばない、話題を読者の役立ちに結びつけるだけの文 → 無い", not glue_hits, len(glue_hits),
               f"{votes}。材料の文をほぼ繰り返すので除いた文 {len(sr.traced)}",
               [{"id": h.id, "text": h.text, "votes": h.votes} for h in glue_hits])]
-    lr = parts_lint(parse_parts(draft))
-    lf = [{"rule": f["rule"], "text": f["excerpt"]} for f in lr["findings"] if f["rule"] in LINT_RULES]
+    lf = [{"rule": f.rule, "text": f.excerpt} for f in parts_lint(parse_parts(draft)) if f.rule in LINT_RULES]
     lf += [{"rule": "dash", "text": s} for s in dash_hits(draft) if text_hash(s) not in keep]
     if kept:
         out[0].detail += f"。残すと決めた文 {len(kept)} は数えない"
@@ -349,8 +360,8 @@ MARK = {True: "OK ", False: "NG ", None: "-  "}
 
 def report_text(rep: CheckReport) -> str:
     n_struct = sum(not c.surface for c in rep.checks)
-    lines = [f"{rep.draft}: {rep.chars} 字、構造・内容の失敗 {len(rep.structural_failed())} / {n_struct}、"
-             f"表面の失敗 {len(rep.failed()) - len(rep.structural_failed())} / {len(rep.checks) - n_struct}"]
+    lines = [(f"{rep.draft}: {rep.chars} 字、構造・内容の失敗 {len(rep.structural_failed())} / {n_struct}、"
+              f"表面の失敗 {len(rep.failed()) - len(rep.structural_failed())} / {len(rep.checks) - n_struct}")]
     for c in sorted(rep.checks, key=lambda c: c.surface):
         lines.append(f"{MARK[c.passed]} {('表面 ' if c.surface else '') + c.id:20} {'' if c.value is None else c.value!s:>8}  {c.relation}")
         if c.detail and (c.passed is False or c.items):
@@ -382,6 +393,3 @@ def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str = "draf
 def check_stem(draft_name: str, surface_only: bool = False) -> str:
     return draft_name.removesuffix(".md").replace("draft", "check") + (".surface" if surface_only else "")
 
-
-def default_fetch(urls: list[str]) -> list[UrlStatus]:
-    return check_urls(urls)

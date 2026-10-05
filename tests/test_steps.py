@@ -8,24 +8,23 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import serving
 from typer.testing import CliRunner
 
-from kumimasu.cli import app
-from kumimasu.factcheck import UrlStatus
-from kumimasu.llm import FakeProvider, get_provider
 from kumimasu import cli as cli_mod
 from kumimasu.check import check, dash_hits, number_flags
+from kumimasu.cli import app
 from kumimasu.design import design, sync_design
 from kumimasu.draft import draft, draft_prompt
+from kumimasu.errors import StepError
+from kumimasu.factcheck import UrlStatus
 from kumimasu.interview import interview
+from kumimasu.llm import FakeProvider, get_provider
 from kumimasu.mark import mark
 from kumimasu.model import Design, Project, UnitUse
 from kumimasu.polish import Flag, apply_replacements, blocks, neighborhood, polish
 from kumimasu.revise import instructions, revise
-from kumimasu.errors import StepError
 from kumimasu.workdir import WorkDir, init_workdir
-
-from conftest import serving
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLES = ROOT / "tests" / "samples"
@@ -53,7 +52,7 @@ BAD_DRAFT = """# 写真の名前を撮影日時にそろえる
 
 def surface_fake(prompt: str) -> str:
     return json.dumps({"items": [{"id": m[1], "category": m[2]}
-                                 for m in re.finditer(r"^\[([MH]\d+)\] .*?← 規則: (\w+)$", prompt, re.M)]})
+                                 for m in re.finditer(r"^\[([MH]\d+)\] .*?← 規則: (\w+)$", prompt, re.MULTILINE)]})
 
 
 def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_ok: bool = True, deep_unit_chars: bool = True,
@@ -80,11 +79,11 @@ def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_
                                              {"id": "m2", "level": "no", "by": [], "note": ""}],
                                "avoid": ["写真管理アプリの比較", "FAQ", "x" * 40]})
         if "一覧の文だけを直して" in prompt:
-            ids = re.findall(r"^\[(F\d+)\]", prompt, re.M)
+            ids = re.findall(r"^\[(F\d+)\]", prompt, re.MULTILINE)
             return json.dumps({"items": [{"id": i, "replacement": "" if k == 0 else "撮影日時は EXIF にあります。"}
                                          for k, i in enumerate(ids)]})
         if "下書きの単位" in prompt:
-            n = len(re.findall(r"^\[(\d+)\]（", prompt.split("# 下書きの単位", 1)[1], re.M))
+            n = len(re.findall(r"^\[(\d+)\]（", prompt.split("# 下書きの単位", 1)[1], re.MULTILINE))
             units = []
             for i in range(1, n + 1):
                 if i == 2 and deep_unit_chars:
@@ -98,11 +97,11 @@ def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_
                                "skips": [{"index": k, "explained": "yes" if skip_explained and k == 1 else "no",
                                           "evidence": [1]} for k in (1, 2)]})
         if "# 対象の記事の単位" in prompt:
-            ids = [int(x) for x in re.findall(r"^\[(\d+)\]（", prompt.split("# 対象の記事の単位", 1)[1], re.M)]
+            ids = [int(x) for x in re.findall(r"^\[(\d+)\]（", prompt.split("# 対象の記事の単位", 1)[1], re.MULTILINE)]
             if "## W" in prompt:
-                return json.dumps({"units": [{"id": i, "v": "yes" if i in (2, 3) else "no", "in": ["W"], "same": 0}
+                return json.dumps({"units": [{"id": i, "v": "yes" if i in (2, 3) else "no", "in": ["W"]}
                                              for i in ids]})
-            return json.dumps({"units": [{"id": i, "v": "yes" if (i not in (2, 3) or present_drop) else "no", "in": ["D"], "same": 0}
+            return json.dumps({"units": [{"id": i, "v": "yes" if (i not in (2, 3) or present_drop) else "no", "in": ["D"]}
                                          for i in ids]})
         if "質問を" in prompt:
             return json.dumps({"questions": [
@@ -414,15 +413,14 @@ def _round_provider(always_new: bool = False):
 
     def respond(prompt: str) -> str:
         if "一覧の文だけを直して" in prompt:
-            ids = re.findall(r"^\[(F\d+)\]", prompt, re.M)
+            ids = re.findall(r"^\[(F\d+)\]", prompt, re.MULTILINE)
             state["n"] += 1
             return json.dumps({"items": [{"id": i, "replacement": f"新しいつなぎ{state['n']}です。" if always_new else ""}
                                          for i in ids]})
         picks = []
-        for m in re.finditer(r"^\[(M\d+)\] (.*?)(?:  ←.*)?$", prompt, re.M):
+        for m in re.finditer(r"^\[(M\d+)\] (.*?)(?:  ←.*)?$", prompt, re.MULTILINE):
             text = m[2]
-            if text.startswith("つなぎA") or (text.startswith("つなぎB") and "つなぎA" not in prompt) \
-                    or text.startswith("新しいつなぎ"):
+            if text.startswith(("つなぎA", "新しいつなぎ")) or (text.startswith("つなぎB") and "つなぎA" not in prompt):
                 picks.append({"id": m[1], "category": "glue"})
         return json.dumps({"items": picks})
     return FakeProvider(respond)
@@ -802,7 +800,7 @@ def test_workdir_root_is_private_and_names_are_checked(tmp_path, monkeypatch):
 
 
 def test_export_never_follows_a_symlink(tmp_path):
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     from kumimasu.review import export_final
 
@@ -812,5 +810,5 @@ def test_export_never_follows_a_symlink(tmp_path):
     out.mkdir()
     target = tmp_path / "victim.txt"
     (out / "w-draft-20261005-1407.md").symlink_to(target)
-    dest = export_final(w, "draft.md", out, datetime(2026, 10, 5, 14, 7))
+    dest = export_final(w, "draft.md", out, datetime(2026, 10, 5, 14, 7, tzinfo=UTC))
     assert dest.name == "w-draft-20261005-1407-2.md" and not target.exists()

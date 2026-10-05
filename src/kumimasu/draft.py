@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .generate import ARTICLE_CLOSE, ARTICLE_OPEN, DATA_NOTE_JA, REGISTER_REQUEST_JA, SOURCES_RULES_JA, split_planned
 from .design import sync_design
+from .generate import (
+    DATA_NOTE_JA,
+    OUTPUT_FORMAT_JA,
+    REGISTER_REQUEST_JA,
+    SOURCES_RULES_JA,
+    article_from,
+)
 from .interview import unit_lines
 from .mark import KIND_LABEL
 from .model import Design, Project, Unit
@@ -14,9 +20,6 @@ if TYPE_CHECKING:
     from .llm import Provider
 
 DROP_SHOWN = 80
-
-OUTPUT_FORMAT_JA = (f"出力の形式: 記事の全文を {ARTICLE_OPEN} と {ARTICLE_CLOSE} のあいだに書いてください。"
-                    "記事は Markdown で、タイトルを # の見出しにします。タグの外には何も書かないでください。")
 
 
 def kept(d: Design, units: list[Unit], use: str) -> list[Unit]:
@@ -55,10 +58,10 @@ def drop_section(d: Design, drop: list[Unit], mode: str) -> str:
 def design_block(p: Project, d: Design, units: list[Unit], drop_list: str | None = None) -> str:
     deep, mention, drop = (kept(d, units, x) for x in ("deep", "mention", "drop"))
     parts = [
-        f"「{p.topic}」について、{p.audience}向けの{KIND_LABEL[d.kind]}を書いてください。"
-        f"長さは{d.target_length}字くらいです。" + REGISTER_REQUEST_JA[d.formality],
-        "次は、この記事の著者（あなたが代わりに書く人）と一緒に決めた設計と、著者の手元の材料です。"
-        "材料にある体験・試したこと・結果と、著者の回答は、著者のものとして一人称で書いて構いません。",
+        (f"「{p.topic}」について、{p.audience}向けの{KIND_LABEL[d.kind]}を書いてください。"
+         f"長さは{d.target_length}字くらいです。" + REGISTER_REQUEST_JA[d.formality]),
+        ("次は、この記事の著者（あなたが代わりに書く人）と一緒に決めた設計と、著者の手元の材料です。"
+         "材料にある体験・試したこと・結果と、著者の回答は、著者のものとして一人称で書いて構いません。"),
         f"## 記事のねらい\n\n{d.purpose}" if d.purpose else "",
         "## 読者が持ち帰るもの（大事な順。どれも本文から読み取れるようにする）\n\n" + _bullets(d.takeaways) if d.takeaways else "",
         "## 掘り下げる材料（記事の中心。紙幅の大半をここに使う）\n\n" + unit_lines(deep, with_mark=False) if deep else "",
@@ -88,7 +91,7 @@ def draft(wd: WorkDir, writer: Provider, name: str = "draft.md", drop_list: str 
     prompt = draft_prompt(p, d, units, drop_list, research)
     wd.write(name.replace(".md", ".prompt.md"), prompt)
     write_used(wd, name, d, drop_list or d.drop_list, {"writer": f"{writer.name}:{writer.model}"})
-    text = split_planned(writer.complete(prompt))[1]
+    text = article_from(writer.complete(prompt))
     wd.write(name, text)
     return text
 

@@ -7,7 +7,7 @@ from markdown_it.token import Token
 
 from .model import Part, PartDoc
 
-_FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S | re.M)
+_FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
 _ALIGN = {"text-align:left": "left", "text-align:right": "right", "text-align:center": "center"}
 
 
@@ -66,7 +66,7 @@ class _Builder:
             return _block("heading", tok, self.lines, level=int(tok.tag[1]), text=inline.content)
         if ty in ("bullet_list_open", "ordered_list_open"):
             ordered = ty == "ordered_list_open"
-            part = _block("list", tok, self.lines, ordered=ordered, marker=tok.markup,
+            part = _block("list", tok, self.lines, ordered=ordered,
                           start=int(tok.attrs.get("start", 1)) if ordered else 1)
             close = "ordered_list_close" if ordered else "bullet_list_close"
             self.i += 1

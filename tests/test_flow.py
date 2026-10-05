@@ -7,21 +7,20 @@ import time
 
 import pytest
 import yaml
+from conftest import serving
+from test_steps import PROJECT, SAMPLES, scripted
 from typer.testing import CliRunner
 
-from kumimasu.cli import app
-from kumimasu.llm import FakeProvider
 from kumimasu import auto as stand_in
 from kumimasu import cli as cli_mod
 from kumimasu import ops
+from kumimasu.cli import app
 from kumimasu.design import design
 from kumimasu.draft import draft
 from kumimasu.interview import interview
+from kumimasu.llm import FakeProvider
 from kumimasu.mark import mark
 from kumimasu.workdir import WorkDir, init_workdir
-
-from conftest import serving
-from test_steps import PROJECT, SAMPLES, scripted
 
 
 def make_wd(root, p=None) -> WorkDir:
@@ -101,7 +100,7 @@ def test_decisions_parity_and_provenance(tmp_path):
     a = make_wd(tmp_path / "a")
     to_review(a)
     run_cli("check", a.root, "--meta-detector", "rules", code=1)
-    from kumimasu.check import CheckReport, Check
+    from kumimasu.check import Check, CheckReport
 
     rep = CheckReport(draft="draft.md", chars=0, checks=[Check(
         id="meta", relation="r", passed=False, surface=True, detail="3 回の判定の多数決",

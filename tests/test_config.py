@@ -8,8 +8,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from kumimasu.cli import app
 from kumimasu import cli as cli_mod
+from kumimasu.cli import app
 from kumimasu.config import ConfigError, init_template, load
 from kumimasu.model import Project
 from kumimasu.workdir import init_workdir
@@ -32,7 +32,7 @@ def write(path: Path, data: dict) -> None:
 
 
 def test_defaults(places):
-    cwd, user, wdir = places
+    cwd, _user, wdir = places
     cfg = load(wdir, cwd)
     assert cfg.provider("writer") == "claude-cli:opus" and cfg.provider("judge") == "claude-cli:sonnet"
     assert cfg.cache_dir == str(Path(os.environ["HOME"]) / ".cache" / "kumimasu")
@@ -61,7 +61,7 @@ def test_precedence_and_relative_paths(places):
 
 
 def test_project_and_workdir_layers_are_untrusted_for_sensitive_keys(places, monkeypatch):
-    cwd, user, wdir = places
+    cwd, _user, wdir = places
     write(cwd / "kumimasu.yaml", {"providers": {"writer": "codex-cli"}, "cache_dir": "/tmp/x", "workdir_root": "w",
                                   "rules_file": "../outside.yaml", "surface": {"runs": 4},
                                   "defaults": {"forms": "表にする"}})
@@ -82,7 +82,7 @@ def test_project_and_workdir_layers_are_untrusted_for_sensitive_keys(places, mon
 
 
 def test_errors_and_rules_file(places):
-    cwd, user, wdir = places
+    cwd, _user, wdir = places
     write(cwd / "kumimasu.yaml", {"providers": {"nope": "x"}})
     with pytest.raises(ConfigError, match="unknown key 'providers.nope'"):
         load(wdir, cwd)
@@ -122,7 +122,7 @@ def test_design_uses_rules_file(places):
 
 
 def test_cli_override_and_config_command(places, monkeypatch):
-    cwd, user, wdir = places
+    cwd, _user, wdir = places
     write(cwd / "kumimasu.yaml", {"providers": {"interviewer": "fake:from-project"}, "cache_dir": "c"})
     seen = []
     monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: seen.append((spec, kw.get("cache_dir"))) or

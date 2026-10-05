@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from .glue import material_grams, traceable
-from .generate import DATA_NOTE_JA
-from .llm import extract_json
 from . import ops
-from .interview import unit_lines
 from .errors import StepError
+from .generate import DATA_NOTE_JA
+from .glue import material_grams, traceable
+from .interview import unit_lines
+from .llm import extract_json
 from .workdir import WorkDir, merge_clusters
 
 if TYPE_CHECKING:

@@ -22,7 +22,6 @@ class Part(BaseModel):
     header: bool = False
     ordered: bool = False
     start: int = 1
-    marker: str = ""
     tight: bool = True
     info: str = ""
     align: list[str] = []
@@ -42,9 +41,6 @@ class PartDoc(BaseModel):
 
     def parts(self) -> Iterator[Part]:
         return self.root.walk()
-
-    def index(self) -> dict[str, Part]:
-        return {p.id: p for p in self.parts()}
 
     def parents(self) -> dict[str, Part]:
         out: dict[str, Part] = {}

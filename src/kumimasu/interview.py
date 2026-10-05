@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .errors import StepError
 from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .model import Interview, Project, Question, Unit
-from .errors import StepError
 from .workdir import WorkDir, merge_clusters
 
 if TYPE_CHECKING:
@@ -92,7 +92,6 @@ def interview(wd: WorkDir, provider: Provider, overwrite: bool = False) -> Inter
 
 
 def with_always_ask(iv: Interview, always: list[str]) -> Interview:
-    """Questions from the config that every interview asks, unless the generated ones already ask them word for word."""
     have = {q.question.strip() for q in iv.questions}
     qs = list(iv.questions)
     for text in always:

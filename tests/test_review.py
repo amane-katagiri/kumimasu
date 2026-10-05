@@ -5,18 +5,31 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import serving
 from typer.testing import CliRunner
 
+from kumimasu.check import (
+    Check,
+    CheckReport,
+    dash_hits,
+    load_keep,
+    surface_checks,
+    text_hash,
+)
 from kumimasu.cli import app
 from kumimasu.llm import FakeProvider
-from kumimasu.render import render
-from kumimasu.check import Check, CheckReport, dash_hits, load_keep, surface_checks, text_hash
 from kumimasu.model import Project
 from kumimasu.polish import find_flags
-from kumimasu.review import apply_review, delete_spans, find_span, load_review, review_path, save_decisions
+from kumimasu.render import render
+from kumimasu.review import (
+    apply_edits,
+    apply_review,
+    find_span,
+    load_review,
+    review_path,
+    save_decisions,
+)
 from kumimasu.workdir import WorkDir, init_workdir
-
-from conftest import serving
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = Project(topic="縦書き", audience="個人サイトを作る人", length=600)
@@ -143,15 +156,16 @@ def test_dash_lint_ignores_code_and_quoted_dashes():
     assert dash_hits(md) == ["理由は後述します——たぶん。"]
 
 
-def test_delete_spans_tidies_and_never_touches_code():
+def test_deletions_tidy_and_never_touch_code():
     src = DRAFT
     s1 = src.index("この記事では、括弧")
     sent = "この記事では、括弧の扱いを見ていきます。"
     item = "- これにより、読みやすくなります。"
     code_at = src.index("/* この記事では */")
     para = src.index("最後の段落です。手元で 120 回試しました。")
-    out = delete_spans(src, [(s1, s1 + len(sent)), (src.index(item) + 2, src.index(item) + len(item)),
-                             (code_at, code_at + 5), (para, para + len("最後の段落です。手元で 120 回試しました。"))])
+    spans = [(s1, s1 + len(sent)), (src.index(item) + 2, src.index(item) + len(item)), (code_at, code_at + 5),
+             (para, para + len("最後の段落です。手元で 120 回試しました。"))]
+    out = apply_edits(src, [(a, b, "") for a, b in spans])
     assert sent not in out and "\n- これにより" not in out and "- \n" not in out
     assert "**縦中横**は" in out and out.count("/* この記事では */") == 1 and "最後の段落" not in out
     assert "\n\n\n" not in out and out.endswith("```\n") and "- 一つ目の項目です。\n\n`…`" in out
@@ -257,14 +271,14 @@ def test_apply_and_export_reject_finals(wd, tmp_path):
 
 
 def test_export_naming_never_overwrites(wd, tmp_path):
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     from kumimasu.review import export_final
 
     with pytest.raises(ValueError):
         export_final(wd, "draft.md", tmp_path / "out")
     wd.write("draft.final.md", "final text\n")
-    t = datetime(2026, 10, 5, 14, 7)
+    t = datetime(2026, 10, 5, 14, 7, tzinfo=UTC)
     a = export_final(wd, "draft.md", tmp_path / "out", t)
     b = export_final(wd, "draft.md", tmp_path / "out", t)
     c = export_final(wd, "draft.md", tmp_path / "out", t)
@@ -286,7 +300,7 @@ def _echo_provider(tag: str):
     def respond(prompt: str) -> str:
         import re
 
-        ids = re.findall(r"^## 項目 (\S+)$", prompt, re.M)
+        ids = re.findall(r"^## 項目 (\S+)$", prompt, re.MULTILINE)
         return json.dumps({"items": [{"id": i, "replacement": f"{tag}{n}。"} for n, i in enumerate(ids)]})
     return FakeProvider(respond)
 
@@ -340,7 +354,7 @@ def test_regenerate_user_edit_note_hint_and_stale(wd):
 def test_cli_apply_regenerate(wd, monkeypatch):
     from kumimasu import cli as cli_mod
 
-    meta, glue = _two_rewrites(wd)
+    _, glue = _two_rewrites(wd)
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
     p = _echo_provider("x")
     monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: p)
@@ -354,7 +368,7 @@ def test_cli_apply_regenerate(wd, monkeypatch):
 
 
 def test_rewrite_reanchors_when_the_sentence_moved(wd):
-    meta, glue = _two_rewrites(wd)
+    _, glue = _two_rewrites(wd)
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
     apply_review(wd, "draft.md", _echo_provider("固"))
     moved = DRAFT.replace("最初", "最初").replace("## 括弧の向き\n\n", "## 括弧の向き\n\n前に一文を足しました。\n\n")

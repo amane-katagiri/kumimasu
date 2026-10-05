@@ -95,8 +95,8 @@ SourceOpt = Annotated[str, typer.Option("--source", help="Who decided: agent-cha
 def init(path: DirArg,
          topic: Annotated[str, typer.Option("--topic")],
          audience: Annotated[str, typer.Option("--audience")],
-         material: Annotated[list[Path], typer.Option("--material", "-m", exists=True, dir_okay=False,
-                                                      help="Notes, logs, code or link lists (repeatable)")] = [],
+         material: Annotated[list[Path] | None, typer.Option("--material", "-m", exists=True, dir_okay=False,
+                                                      help="Notes, logs, code or link lists (repeatable)")] = None,
          kind: Annotated[str, typer.Option("--kind", help="実用 | 読み物 | 調査")] = "実用",
          length: Annotated[int, typer.Option("--length", min=300)] = 4000) -> None:
     """Copy the material into DIR and split it into material units (units.yaml)."""
@@ -110,17 +110,18 @@ def init(path: DirArg,
         root = Path(_cfg().workdir_root)
         if path.resolve().is_relative_to(root.resolve()):
             private_dir(root)
-        _, units = init_workdir(path, Project(topic=topic, audience=audience, kind=kind, length=length), material)
+        _, units = init_workdir(path, Project(topic=topic, audience=audience, kind=kind, length=length), material or [])
     except StepError as e:
         _fail(e)
-    typer.echo(f"wrote {path / 'project.yaml'} and {path / 'units.yaml'} ({len(units)} units from {len(material)} files)")
+    typer.echo(f"wrote {path / 'project.yaml'} and {path / 'units.yaml'} ({len(units)} units from {len(material or [])} files)")
 
 
 @app.command()
 def mark(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
          new_baseline: Annotated[bool, typer.Option("--new-baseline", help="Write baseline/W.md again")] = False) -> None:
     """Mark each unit as searchable or first-hand against one web-enabled generic article (a marker, not a goal)."""
-    from .mark import mark as run, mark_counts
+    from .mark import mark as run
+    from .mark import mark_counts
 
     wd = _wd(path)
     _guard(wd, "interview", action="目印付け")
@@ -178,7 +179,8 @@ def serve(path: DirArg, port: Annotated[int | None, typer.Option("--port", help=
                                                        "(default: config providers.rewriter)")] = None) -> None:
     """Local page (127.0.0.1): material marks, interview answers, the design, and the final check of a draft.
     Edits autosave to the YAML files."""
-    from .server import WriteApp, serve as run
+    from .server import WriteApp
+    from .server import serve as run
 
     wd = _wd(path)
     cfg = _cfg(path)
@@ -279,7 +281,8 @@ def research(path: DirArg, researcher: ResearcherOpt = None) -> None:
 
 def _research(wd: WorkDir, cfg, researcher: str | None, refresh: bool):
     from .design import sync_design
-    from .research import load_research, research as run
+    from .research import load_research
+    from .research import research as run
 
     d = sync_design(wd.design(), wd.units())
     old = load_research(wd)
@@ -320,10 +323,10 @@ def draft(path: DirArg, writer: WriterOpt = None, researcher: ResearcherOpt = No
 def _fetch(verify: bool):
     if not verify:
         return None
-    from .check import default_fetch
+    from .factcheck import check_urls
 
     _notice("リンクの確認: 材料に無いリンクを開きます（ネットワークを使います。非公開のアドレスには繋ぎません）")
-    return default_fetch
+    return check_urls
 
 
 @app.command()
@@ -335,7 +338,8 @@ def check(path: DirArg, judge: JudgeOpt = None, meta_detector: MetaOpt = None,
           surface_runs: Annotated[int | None, typer.Option("--surface-runs", min=1, help="Majority-vote runs for meta/glue "
                                                            "(default: config surface.runs)")] = None) -> None:
     """Check the draft against the design (the design's metamorphic relations) -> DIR/check.json and check.txt."""
-    from .check import check as run, report_text
+    from .check import check as run
+    from .check import report_text
     from .workdir import check_draft_name
 
     wd = _wd(path)
@@ -387,7 +391,8 @@ def polish(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft
            out: Annotated[str | None, typer.Option("--out", help="File name inside DIR (default: <draft>.polished.md)")] = None) -> None:
     """Surface pass: majority-vote detection of meta-discourse, glue and dashes; with --yes, rewrite only those sentences
     and re-detect around the edits until nothing stable is left."""
-    from .polish import POLISH_RULES, polish as run
+    from .polish import POLISH_RULES
+    from .polish import polish as run
     from .workdir import check_draft_name
 
     chosen = tuple(r.strip() for r in rules.split(",") if r.strip())
@@ -435,7 +440,7 @@ def export(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft
     typer.echo(f"wrote {dest}")
 
 
-from . import cli_flow  # noqa: E402,F401  (registers the checkpoint commands on `app`)
+from . import cli_flow  # noqa: F401  (registers the checkpoint commands on `app`)
 
 
 def main() -> None:

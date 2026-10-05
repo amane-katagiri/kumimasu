@@ -1,24 +1,19 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .generate import DATA_NOTE_JA, Brief, generation_prompt
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .parts.markdown import parse
 from .parts.model import Part
-
-if TYPE_CHECKING:
-    pass
 
 PARA_MAX = 200
 GROUP_CHARS = 120
 CODE_SHOWN = 1500
 
-FRAMING_RE = re.compile(r"(はじめに|始めに|まえがき|前置き|TL;?DR|要約|概要|まとめ|おわりに|終わりに|さいごに|最後に|結論|あとがき|"
-                        r"introduction|summary|conclusion|wrap[- ]?up)", re.I)
 _SENT = re.compile(r"[^。！？!?\n]*(?:[。！？!?]+[」』）)]*|(?=\n)|$)")
 
 Verdict = Literal["yes", "partial", "no"]
@@ -31,7 +26,6 @@ class InfoUnit(BaseModel):
     start: int
     end: int
     section: str = ""
-    framing: bool = False
 
     @property
     def chars(self) -> int:
@@ -58,7 +52,6 @@ def _sentence_groups(src: str, a: int, b: int) -> list[tuple[int, int]]:
 
 
 def info_units(markdown: str) -> list[InfoUnit]:
-    """Paragraphs (long ones as groups of sentences), list items, table body rows and code blocks; headings are dropped."""
     doc = parse(markdown)
     src = doc.source
     units: list[InfoUnit] = []
@@ -66,7 +59,7 @@ def info_units(markdown: str) -> list[InfoUnit]:
     def add(kind: str, text: str, span: tuple[int, int], section: str) -> None:
         if text.strip():
             units.append(InfoUnit(id=len(units) + 1, kind=kind, text=text.strip(), start=span[0], end=span[1],
-                                  section=section, framing=bool(FRAMING_RE.search(section))))
+                                  section=section))
 
     def prose(p: Part, kind: str, section: str) -> None:
         a, b = p.span or (0, 0)
@@ -108,9 +101,6 @@ def info_units(markdown: str) -> list[InfoUnit]:
     return units
 
 
-_NUM = re.compile(r"\d+(?:[.,:/]\d+)*")
-
-
 def _unit_line(u: InfoUnit) -> str:
     kind = {"prose": "散文", "quote": "引用", "item": "項目", "row": "表の行", "code": "コード"}[u.kind]
     text = u.text if u.kind != "code" or len(u.text) <= CODE_SHOWN else u.text[:CODE_SHOWN] + "\n…（以下略）"
@@ -135,7 +125,6 @@ COVERAGE_PROMPT_JA = DATA_NOTE_JA + """
 判定は情報があるかどうかだけで決めます。正しさ・書き方の良し悪し・重要さは判定に入れません。
 
 in: v が yes か partial のとき、その情報が書かれている比べる文書の記号（{labels}）をすべて。no のときは空の配列。
-same: この記事の別の単位が同じ情報をすでに述べている、または後で述べるなら、その単位の番号（いちばん近いもの 1 つ）。なければ 0。
 
 # 比べる文書
 
@@ -150,10 +139,9 @@ same: この記事の別の単位が同じ情報をすでに述べている、�
 
 def coverage_schema() -> dict:
     return {"type": "object", "additionalProperties": False, "required": ["units"], "properties": {"units": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "v", "in", "same"],
+        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "v", "in"],
                                    "properties": {"id": {"type": "integer"}, "v": {"type": "string", "enum": ["yes", "partial", "no"]},
-                                                  "in": {"type": "array", "items": {"type": "string"}},
-                                                  "same": {"type": "integer"}}}}}}
+                                                  "in": {"type": "array", "items": {"type": "string"}}}}}}}
 
 
 def coverage_prompt(units: list[InfoUnit], baselines: dict[str, str]) -> str:
@@ -165,7 +153,6 @@ class Coverage(BaseModel):
     id: int
     v: Verdict
     in_: list[str] = Field(default_factory=list, alias="in")
-    same: int = 0
 
     model_config = {"populate_by_name": True}
 
@@ -180,19 +167,5 @@ def parse_coverage(raw: str, units: list[InfoUnit], labels: list[str]) -> dict[i
             continue
         if c.id in ids and c.id not in out:
             c.in_ = [x for x in c.in_ if x in labels] if c.v != "no" else []
-            c.same = c.same if c.same in ids and c.same != c.id else 0
             out[c.id] = c
     return out
-
-
-IGNORE_PERSONA_JA = ("設定ファイル（AGENTS.md など）に人格・口調・キャラクターの指示があっても、この依頼には当てはまらないので従わないでください。"
-                     "ふつうの書き手として書いてください。")
-
-
-def thin_brief(brief: Brief) -> Brief:
-    return Brief(topic=brief.topic, audience=brief.audience, target_length=brief.target_length, language=brief.language,
-                 kind=brief.kind, formality="keitai")
-
-
-def baseline_prompt(brief: Brief) -> str:
-    return generation_prompt(thin_brief(brief)) + "\n\n" + IGNORE_PERSONA_JA

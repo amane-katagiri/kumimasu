@@ -1,5 +1,3 @@
-"""Checkpoint commands: the CLI mirror of every page operation (same functions in ops.py), plus show / confirm /
-wait / auto / restart for an agent that runs the loop and talks with the user."""
 from __future__ import annotations
 
 import json
@@ -10,8 +8,8 @@ import typer
 
 from . import ops
 from .cli import DirArg, SourceOpt, _cfg, _fail, _llm, _wd, app
-from .model import SOURCES, STAGES
 from .errors import StepError
+from .model import SOURCES, STAGES
 
 
 def _source(source: str) -> str:

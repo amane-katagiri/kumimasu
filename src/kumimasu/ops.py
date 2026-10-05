@@ -1,7 +1,3 @@
-"""Every write a person or the agent makes at a checkpoint, shared by the web page and the CLI.
-
-Each operation checks the stage, writes the work-directory files, and appends a provenance record to history.jsonl.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -13,9 +9,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
-from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, UnitUse
 from .errors import StepError
 from .files import append_jsonl, atomic_write, read_jsonl
+from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, UnitUse
 from .workdir import WorkDir, now
 
 if TYPE_CHECKING:
@@ -135,7 +131,7 @@ def toggled_skip(d: Design, unit_id: str, on: bool, label: str = "", text: str =
         return [x.model_dump() for x in d.skip] + [
             {"label": label or re.sub(r"\s+", " ", text)[:20], "units": [unit_id], "why": "手で追加"}]
     return [x.model_copy(update={"units": [i for i in x.units if i != unit_id]}).model_dump()
-            for x in d.skip if not (x.units == [unit_id])]
+            for x in d.skip if x.units != [unit_id]]
 
 
 def toggled_aside(d: Design, unit_id: str, on: bool, where: str = "") -> list[dict]:
@@ -167,15 +163,13 @@ def apply(wd: WorkDir, base: str, provider: Provider | None, source: str, regene
 
 def article_info(wd: WorkDir, final_text: str) -> dict:
     d = wd.design()
-    m = re.search(r"^#\s+(.+)$", final_text, re.M)
+    m = re.search(r"^#\s+(.+)$", final_text, re.MULTILINE)
     return {"title": m[1].strip() if m else "", "purpose": d.purpose, "takeaways": d.takeaways,
             "register": d.formality, "kind": d.kind, "target_length": d.target_length}
 
 
 def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Provider] | None = None,
             draft: str = "") -> dict:
-    """確定して渡す: finish the current stage, write handoff.json (and append it to handoffs.jsonl), move on.
-    The review stage is applied first when the decisions changed since the last apply."""
     from .review import final_name, needs_apply, needs_rewrite_call
 
     with LOCK:
@@ -225,7 +219,6 @@ def handoffs(wd: WorkDir) -> list[dict]:
 
 
 def find_handoff(wd: WorkDir, for_stage: str) -> dict | None:
-    """The handoff that completes `for_stage` in the current round (`done` means the review handoff)."""
     target = "review" if for_stage == "done" else for_stage
     r = wd.round
     rows = [h for h in handoffs(wd) if h["stage"] == target and h["round"] == r]
@@ -247,8 +240,6 @@ RESTART_FROM = ("interview", "design", "drafting")
 
 
 def restart(wd: WorkDir, from_stage: str, source: str) -> int:
-    """A new round: material and interview stay; the new round has its own design (design.rN.yaml) and drafts
-    (draft.rN.md). From drafting, the previous round's design is copied over."""
     if from_stage not in RESTART_FROM:
         raise ValueError(f"--from must be one of {', '.join(RESTART_FROM)}")
     with LOCK:
@@ -269,7 +260,6 @@ VERSIONED_GLOBS = ("design*.yaml", "review.*.yaml", "draft*.md", "draft*.json", 
 
 
 def version(wd: WorkDir) -> str:
-    """Changes whenever a file the page shows changes (by name, size and mtime)."""
     files = [wd.root / n for n in VERSIONED] + [p for g in VERSIONED_GLOBS for p in wd.root.glob(g)]
     parts = sorted(f"{f.name}:{f.stat().st_size}:{f.stat().st_mtime_ns}" for f in files if f.is_file())
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]

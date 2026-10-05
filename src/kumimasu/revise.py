@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .generate import DATA_NOTE_JA, SOURCES_RULES_JA, split_planned
 from .check import CheckReport, Fetch, check
 from .design import sync_design
-from .draft import OUTPUT_FORMAT_JA, design_block, write_used
+from .draft import design_block, write_used
+from .generate import DATA_NOTE_JA, OUTPUT_FORMAT_JA, SOURCES_RULES_JA, article_from
 from .research import Research, load_research, research_block
 from .workdir import WorkDir
 
@@ -63,8 +63,8 @@ def instructions(rep: CheckReport, target_length: int) -> list[str]:
 def revise_prompt(block: str, draft: str, todo: list[str], research: Research | None = None) -> str:
     return "\n\n".join(x for x in [
         DATA_NOTE_JA,
-        "次の下書きを、設計に照らした検査で見つかった点だけ直して、全文を書き直してください。"
-        "指摘の無い所は、できるだけそのまま残してください。",
+        ("次の下書きを、設計に照らした検査で見つかった点だけ直して、全文を書き直してください。"
+         "指摘の無い所は、できるだけそのまま残してください。"),
         "# 直す点\n\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(todo, 1)),
         "# 下書き\n\n" + draft.strip(),
         "# 設計と材料（下書きを書いたときの依頼）\n\n" + block,
@@ -89,5 +89,5 @@ def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None
     prompt = revise_prompt(design_block(p, d, units), wd.read(src), todo, load_research(wd))
     wd.write(dst.replace(".md", ".prompt.md"), prompt)
     write_used(wd, dst, d, d.drop_list, {"writer": f"{writer.name}:{writer.model}"})
-    wd.write(dst, split_planned(writer.complete(prompt))[1])
+    wd.write(dst, article_from(writer.complete(prompt)))
     return check(wd, judge, meta, dst, fetch), todo

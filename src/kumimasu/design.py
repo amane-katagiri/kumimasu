@@ -3,13 +3,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .generate import DATA_NOTE_JA
-from .llm import extract_json
 from .config import load
-from .interview import unit_lines
-from .model import ASIDE_MAX, SKIP_MAX, USES, Aside, Conflict, Design, Project, Skip, Unit, UnitUse
-from .rules import default_rules
 from .errors import StepError
+from .generate import DATA_NOTE_JA
+from .interview import unit_lines
+from .llm import extract_json
+from .model import (
+    ASIDE_MAX,
+    SKIP_MAX,
+    USES,
+    Aside,
+    Conflict,
+    Design,
+    Project,
+    Skip,
+    Unit,
+    UnitUse,
+)
+from .rules import default_rules
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -186,7 +197,6 @@ def parse_noise(raw: str, d: Design, units: list[Unit], skip_max: int = SKIP_MAX
 
 
 def apply_noise(d: Design) -> Design:
-    """Skipped units are not written at all; asides must be kept."""
     skipped = {i for s in d.skip for i in s.units}
     aside = d.aside_ids()
     units = []

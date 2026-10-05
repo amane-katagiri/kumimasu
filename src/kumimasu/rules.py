@@ -37,7 +37,6 @@ def packaged_rules() -> list[Rule]:
 
 
 def default_rules(path: Path | None = None) -> list[Rule]:
-    """The packaged defaults, replaced entirely by the rules file from the config (`rules_file`) when there is one."""
     if path is None:
         return packaged_rules()
     return parse_rules(path.read_text(encoding="utf-8"), str(path))

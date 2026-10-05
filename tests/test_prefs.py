@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from test_steps import PROJECT, SAMPLES, scripted
 from typer.testing import CliRunner
 
-from kumimasu.cli import app
 from kumimasu import ops
+from kumimasu.cli import app
 from kumimasu.design import design
 from kumimasu.draft import draft, read_used
 from kumimasu.interview import interview
@@ -18,8 +19,6 @@ from kumimasu.model import Rule
 from kumimasu.prefs import prefs_diff, rules_diff
 from kumimasu.rules import packaged_rules
 from kumimasu.workdir import WorkDir, init_workdir
-
-from test_steps import PROJECT, SAMPLES, scripted
 
 
 @pytest.fixture
