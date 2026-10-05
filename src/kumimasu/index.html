@@ -1199,7 +1199,7 @@ function rewriteBlock(it) {
     `決め直すか、書き直し直してください。</div><div class="acts"><button id="fc-regen" class="btn">もう一度書き直す</button></div>`;
   if (!it.rewrite) return `<div class="reason">まだ書き直していません。次の反映で、この項目だけを書き直します。</div>`;
   const src = it.rewrite.source === "user" ? "手で直した" : "LLM";
-  return `<label>書き直し結果（${src}・固定。ほかの項目を変えても変わりません）</label>
+  return `<label>書き直し結果（${src}・固定。ほかの項目を変えても変わりません${it.rewrite.scope === "sentence" ? "。この文を含む文全体と置き換えます" : ""}）</label>
     <textarea id="fc-rewrite-text">${esc(it.rewrite.result)}</textarea>
     ${it.note_changed ? `<div class="warn-box">メモが、この結果を作った後に変わっています。メモを反映させるなら書き直し直してください。</div>` : ""}
     <div class="acts"><button id="fc-regen" class="btn">もう一度書き直す</button></div>`;

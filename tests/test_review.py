@@ -427,3 +427,23 @@ def test_rewrite_results_do_not_repeat_block_marks(src, span, reply, want):
     from kumimasu.review import strip_block_marks
 
     assert strip_block_marks(src, src.index(span), reply) == want
+
+
+def test_rewrite_of_part_of_a_sentence_replaces_the_whole_sentence():
+    from kumimasu.review import Item, Rewrite, rewrite_prompt, rewrite_span
+    from kumimasu.textutil import enclosing_sentences
+
+    src = "# 題\n\n前の文です。この設定はかなり便利で、毎回使えます。次の文です。\n\n## 見出しの一部\n"
+    a = src.index("かなり便利で")
+    b = a + len("かなり便利で")
+    s, e = enclosing_sentences(src, a, b)
+    assert src[s:e] == "この設定はかなり便利で、毎回使えます。"
+    it = Item(id="x", kind="glue", start=a, end=b, text=src[a:b], decision="rewrite")
+    prompt = rewrite_prompt(src, [it])
+    assert "直す文:\nこの設定はかなり便利で、毎回使えます。" in prompt and "特に直す箇所（文の一部）: かなり便利で" in prompt
+    it.rewrite = Rewrite(result="この設定は毎回使えます。", scope="sentence")
+    assert rewrite_span(src, it) == (s, e)
+    it.rewrite = Rewrite(result="便利で", scope="span")
+    assert rewrite_span(src, it) == (a, b)
+    h = src.index("一部")
+    assert src[slice(*enclosing_sentences(src, h, h + 2))] == "見出しの一部"

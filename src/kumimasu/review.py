@@ -20,7 +20,15 @@ from .infounits import info_units
 from .keep import KeepStore, text_hash
 from .llm import ask_replacements
 from .surface import SURFACE_CATEGORIES
-from .textutil import apply_edits, code_ranges, locate, norm, overlaps, paragraph_at
+from .textutil import (
+    apply_edits,
+    code_ranges,
+    enclosing_sentences,
+    locate,
+    norm,
+    overlaps,
+    paragraph_at,
+)
 from .workdir import WorkDir, check_draft_name, now
 
 if TYPE_CHECKING:
@@ -39,6 +47,7 @@ class Rewrite(BaseModel):
     source: Literal["llm", "user"] = "llm"
     made_from: str = ""
     note: str = ""
+    scope: Literal["span", "sentence"] = "span"
 
 
 class Item(BaseModel):
@@ -255,7 +264,8 @@ def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
         result = x.get("result")
         if result is not None and (it.rewrite is None or str(result) != it.rewrite.result):
             it.rewrite = Rewrite(result=strip_block_marks(src, it.start, str(result).strip()), source="user",
-                                 made_from=current_text(it, src), note=it.note)
+                                 made_from=current_text(it, src), note=it.note,
+                                 scope=it.rewrite.scope if it.rewrite else "span")
     if source and (it.decision, it.note, it.rewrite) != before:
         it.source = source
 
@@ -271,6 +281,7 @@ REWRITE_PROMPT_JA = DATA_NOTE_JA + """
 - 著者のメモがあれば、それに従います。
 - 段落・見出し・表・コードの構成は変えません。文の数も、メモが求めない限り増やしません。
 - 「直す文」に無い見出しの # や箇条書きの記号は付けず、置き換える文そのものだけを返します。
+- 「特に直す箇所」がある項目も、返すのは「直す文」全体を置き換える文です。直す箇所の前後はそのまま残し、文として切れないようにします。
 - 情報は足しません。
 
 {{"items": [{{"id": "…", "replacement": "…"}}]}} の形の JSON で、すべての項目に答えてください。
@@ -288,10 +299,18 @@ def strip_block_marks(src: str, start: int | None, text: str) -> str:
     return _BLOCK_MARK.sub("", text, count=1).lstrip() if line_head.strip() and _BLOCK_MARK.fullmatch(line_head) else text
 
 
+def rewrite_span(src: str, it: Item) -> tuple[int, int]:
+    if it.rewrite is not None and it.rewrite.scope == "span":
+        return it.start, it.end
+    return enclosing_sentences(src, it.start, it.end)
+
+
 def rewrite_prompt(src: str, items: list[Item]) -> str:
     blocks = []
     for it in items:
-        blocks.append(f"## 項目 {it.id}\n\n直す文:\n{src[it.start:it.end]}\n\n"
+        a, b = enclosing_sentences(src, it.start, it.end)
+        focus = f"特に直す箇所（文の一部）: {src[it.start:it.end]}\n\n" if (a, b) != (it.start, it.end) else ""
+        blocks.append(f"## 項目 {it.id}\n\n直す文:\n{src[a:b]}\n\n{focus}"
                       + (f"著者のメモ: {it.note}\n\n" if it.note else "") + f"文脈（この段落の中の文です）:\n{paragraph_at(src, it.start, it.end)}")
     return REWRITE_PROMPT_JA.format(items="\n\n".join(blocks))
 
@@ -426,13 +445,13 @@ def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate:
         for it in fresh:
             if it.id in got:
                 it.rewrite = Rewrite(result=strip_block_marks(src, it.start, got[it.id]), source="llm",
-                                     made_from=current_text(it, src), note=it.note)
+                                     made_from=current_text(it, src), note=it.note, scope="sentence")
                 mark_flags(it, src)
         save_review(wd, rev)
     elif regenerate:
         save_review(wd, rev)
     done = [i for i in rews if i.rewrite is not None]
-    edits = [(i.start, i.end, "") for i in dels] + [(i.start, i.end, i.rewrite.result) for i in done]
+    edits = [(i.start, i.end, "") for i in dels] + [(*rewrite_span(src, i), i.rewrite.result) for i in done]
     text = apply_edits(src, edits)
     out = final_name(draft)
     wd.write(out, text)

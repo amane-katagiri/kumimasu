@@ -52,6 +52,23 @@ def sentence_spans(src: str, a: int, b: int) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in _SENT_SPAN.finditer(src, a, b) if m.group().strip()]
 
 
+_LINE_MARK = re.compile(r"[ \t]*(?:#{1,6}[ \t]+|>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*")
+
+
+def enclosing_sentences(src: str, a: int, b: int) -> tuple[int, int]:
+    line_start = src.rfind("\n", 0, a) + 1
+    line_end = src.find("\n", b)
+    line_end = len(src) if line_end < 0 else line_end
+    body = _LINE_MARK.match(src, line_start).end()
+    spans = [(x, y) for x, y in sentence_spans(src, body, line_end) if x < b and y > a]
+    if not spans:
+        return a, b
+    x, y = spans[0][0], spans[-1][1]
+    while x < y and src[x].isspace():
+        x += 1
+    return min(x, a), max(y, b)
+
+
 def blocks(text: str) -> list[tuple[int, int]]:
     code = code_ranges(text)
     out: list[tuple[int, int]] = []
