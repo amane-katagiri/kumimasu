@@ -12,23 +12,22 @@ from kumimasu.check import (
     Check,
     CheckReport,
     dash_hits,
-    load_keep,
     surface_checks,
-    text_hash,
 )
 from kumimasu.cli import app
+from kumimasu.keep import KeepStore, text_hash
 from kumimasu.llm import FakeProvider
 from kumimasu.model import Project
 from kumimasu.polish import find_flags
 from kumimasu.render import render
 from kumimasu.review import (
-    apply_edits,
+    ReviewContext,
     apply_review,
-    find_span,
     load_review,
     review_path,
     save_decisions,
 )
+from kumimasu.textutil import apply_edits, locate
 from kumimasu.workdir import WorkDir, init_workdir
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -108,7 +107,7 @@ def test_items_have_offsets_that_match_the_source_and_rendered_spans(wd):
     starts = sorted(int(m[1]) for m in re.finditer(r'data-s="(\d+)"', html))
     for it in rev.items:
         assert any(s <= it.start < s + 200 for s in starts)
-    assert find_span("a **b** c", "abc") == (0, 9)
+    assert locate("a **b** c", "abc") == (0, 9)
 
 
 def test_decisions_persist_and_keep_is_remembered(wd):
@@ -125,9 +124,9 @@ def test_decisions_persist_and_keep_is_remembered(wd):
     got = {i.id: (i.decision, i.note) for i in again.items}
     assert got[meta.id] == ("keep", "") and got[glue.id] == ("rewrite", "短く") and got["user-1"] == ("delete", "")
     assert next(i for i in saved.items if i.id == "user-1").text == "最後の段落です。"
-    assert text_hash(meta.text) in load_keep(wd)
+    assert text_hash(meta.text) in KeepStore(wd).hashes()
     save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": ""}]})
-    assert text_hash(meta.text) not in load_keep(wd) and any(i.kind == "user" for i in load_review(wd, "draft.md").items)
+    assert text_hash(meta.text) not in KeepStore(wd).hashes() and any(i.kind == "user" for i in load_review(wd, "draft.md").items)
     save_decisions(wd, "draft.md", {"remove": ["user-1"]})
     assert all(i.kind != "user" for i in load_review(wd, "draft.md").items)
     with pytest.raises(ValueError):
@@ -143,7 +142,7 @@ def test_keep_from_another_review_marks_new_items_and_suppresses_checks(wd):
     wd.write("draft.v2.md", DRAFT)
     write_report(wd, standard_report(wd), "check.v2.json")
     assert next(i for i in load_review(wd, "draft.v2.md").items if i.kind == "meta").decision == "keep"
-    keep = load_keep(wd)
+    keep = KeepStore(wd).hashes()
     checks = {c.id: c for c in surface_checks(DRAFT, [], None, keep=keep)}
     assert all("見ていきます" not in x["text"] for x in checks["meta"].items) and "残すと決めた文 1" in checks["meta"].detail
     flags, _ = find_flags(DRAFT, DRAFT, FakeProvider(lambda p: json.dumps({"items": [{"id": "M1", "category": "signpost"}]})),
@@ -235,13 +234,13 @@ def test_server_refuses_symlinked_drafts(wd, tmp_path):
 
 
 def test_cli_apply(wd, monkeypatch):
-    from kumimasu import cli as cli_mod
+    from kumimasu import cli_common as cc
 
     standard_report(wd)
     glue = next(i for i in load_review(wd, "draft.md").items if i.kind == "glue")
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
     p = FakeProvider(lambda prompt: json.dumps({"items": [{"id": glue.id, "replacement": "別の文。"}]}))
-    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: p)
+    monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: p)
     res = CliRunner().invoke(app, ["apply", str(wd.root)])
     assert res.exit_code == 0, res.output
     assert "rewritten 1" in res.output and "+ - 別の文。" in res.output
@@ -343,7 +342,6 @@ def test_regenerate_user_edit_note_hint_and_stale(wd):
     assert next(i for i in rev.items if i.id == meta.id).rewrite is None
     wd.write("draft.md", DRAFT.replace("これにより、読みやすくなります。", "これにより、とても読みやすくなります。"))
     write_report(wd, standard_report(wd))
-    wd.write("draft.md", DRAFT.replace("これにより、読みやすくなります。", "これにより、とても読みやすくなります。"))
     rev = load_review(wd, "draft.md")
     stale = [i for i in rev.items if i.stale]
     assert [i.id for i in stale] == [glue.id]
@@ -352,19 +350,19 @@ def test_regenerate_user_edit_note_hint_and_stale(wd):
 
 
 def test_cli_apply_regenerate(wd, monkeypatch):
-    from kumimasu import cli as cli_mod
+    from kumimasu import cli_common as cc
 
     _, glue = _two_rewrites(wd)
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
     p = _echo_provider("x")
-    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: p)
+    monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: p)
     r = CliRunner()
     assert "calls 1" in r.invoke(app, ["apply", str(wd.root)]).output
     assert "calls 0" in r.invoke(app, ["apply", str(wd.root)]).output
     out = r.invoke(app, ["apply", str(wd.root), "--regenerate", glue.id]).output
     assert "calls 1" in out and len(p.calls) == 2
     bad = r.invoke(app, ["apply", str(wd.root), "--regenerate", "nope"])
-    assert bad.exit_code == 1 and "unknown item ids" in bad.output
+    assert bad.exit_code == 1 and "知らない項目です" in bad.output
 
 
 def test_rewrite_reanchors_when_the_sentence_moved(wd):
@@ -409,7 +407,8 @@ def test_final_changes_locates_rewrites_and_deletions():
 
 
 def test_needs_apply_tracks_decisions_since_last_apply(wd):
-    from kumimasu.review import needs_apply
+    def needs_apply(wd, name):
+        return ReviewContext.load(wd, name).needs_apply()
 
     standard_report(wd)
     meta = next(i for i in load_review(wd, "draft.md").items if i.kind == "meta")

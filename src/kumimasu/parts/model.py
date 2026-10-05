@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import secrets
+import itertools
 from collections.abc import Iterator
 
 from pydantic import BaseModel, Field
@@ -9,8 +9,11 @@ PATH_PREFIX = {"section": "s", "heading": "h", "paragraph": "p", "list": "l", "i
                "code": "c", "quote": "q", "figure": "f", "html": "x", "rule": "hr", "raw": "raw", "front_matter": "fm"}
 
 
+_IDS = itertools.count(1)
+
+
 def new_id() -> str:
-    return secrets.token_hex(4)
+    return f"p{next(_IDS)}"
 
 
 class Part(BaseModel):

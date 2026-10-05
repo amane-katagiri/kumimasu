@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .textutil import norm
+
 GLUE_RULE = re.compile(
     r"これにより|これによって|こうすることで|こうすれば|そうすれば|おかげで|そのため、?[^。]{0,30}(できます|なります)|"
     r"という点で(便利|助か|嬉し|うれし|有利|安心)|便利です|便利だ|安心です|安心だ|役立ちます|役に立ちます|役に立つ|"
@@ -14,7 +16,7 @@ TRACE_MIN = 0.5
 
 
 def _grams(text: str) -> set[str]:
-    t = re.sub(r"\s+", "", text)
+    t = norm(text)
     return {t[i:i + TRACE_N] for i in range(len(t) - TRACE_N + 1)}
 
 

@@ -1,26 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .config import load
 from .errors import StepError
 from .generate import DATA_NOTE_JA
 from .interview import unit_lines
-from .llm import extract_json
-from .model import (
-    ASIDE_MAX,
-    SKIP_MAX,
-    USES,
-    Aside,
-    Conflict,
-    Design,
-    Project,
-    Skip,
-    Unit,
-    UnitUse,
-)
-from .rules import default_rules
+from .llm import STR, arr, ask_json, enum, obj, rows, strings
+from .model import USES, Aside, Conflict, Design, Project, Rule, Skip, Unit, UnitUse
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -52,23 +39,15 @@ DESIGN_PROMPT_JA = DATA_NOTE_JA + """
 {units}"""
 
 
+TAKEAWAYS_MAX = 3
+AVOID_MAX = 6
 RESEARCH_MAX = 5
 RESEARCH_CHARS = 60
 
 
 def design_schema() -> dict:
-    return {"type": "object", "additionalProperties": False,
-            "required": ["purpose", "takeaways", "units", "order", "forms", "research"],
-            "properties": {
-                "purpose": {"type": "string"},
-                "takeaways": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
-                "units": {"type": "array", "items": {
-                    "type": "object", "additionalProperties": False, "required": ["id", "use", "why"],
-                    "properties": {"id": {"type": "string"}, "use": {"type": "string", "enum": list(USES)},
-                                   "why": {"type": "string"}}}},
-                "order": {"type": "array", "items": {"type": "string"}},
-                "forms": {"type": "array", "items": {"type": "string"}},
-                "research": {"type": "array", "items": {"type": "string"}, "maxItems": RESEARCH_MAX}}}
+    return obj(purpose=STR, takeaways=arr(STR, TAKEAWAYS_MAX), units=arr(obj(id=STR, use=enum(*USES), why=STR)),
+               order=arr(STR), forms=arr(STR), research=arr(STR, RESEARCH_MAX))
 
 
 def design_prompt(p: Project, units: list[Unit], forms: str = "") -> str:
@@ -83,39 +62,46 @@ def default_use(u: Unit) -> str:
     return "drop" if u.searchable == "yes" else "mention"
 
 
-def parse_design(raw: str, p: Project, units: list[Unit], rules_path: Path | None = None) -> Design:
-    data = extract_json(raw)
+def parse_design(data: dict, p: Project, units: list[Unit], rules: list[Rule]) -> Design:
     chosen: dict[str, UnitUse] = {}
-    for row in data.get("units", []):
+    ids = {u.id for u in units}
+    for row in rows(data, "units"):
         uid, use = row.get("id"), row.get("use")
-        if uid in {u.id for u in units} and use in USES and uid not in chosen:
+        if uid in ids and use in USES and uid not in chosen:
             chosen[uid] = UnitUse(id=uid, use=use, why=str(row.get("why", "")))
     uses = [chosen.get(u.id) or UnitUse(id=u.id, use=default_use(u), why="既定（提案に無かった）") for u in units]
     return Design(purpose=str(data.get("purpose", "")).strip(), kind=p.kind,
-                  takeaways=[t.strip() for t in data.get("takeaways", []) if str(t).strip()][:3], units=uses,
-                  order=[str(x) for x in data.get("order", [])], target_length=p.length,
-                  forms=[str(x) for x in data.get("forms", [])], rules=default_rules(rules_path),
-                  research=[t for t in (str(x).strip() for x in data.get("research", [])) if 0 < len(t) <= RESEARCH_CHARS]
-                  [:RESEARCH_MAX])
+                  takeaways=[t for t in strings(data, "takeaways") if t][:TAKEAWAYS_MAX], units=uses,
+                  order=strings(data, "order"), target_length=p.length, forms=strings(data, "forms"),
+                  rules=[r.model_copy() for r in rules],
+                  research=[t for t in strings(data, "research") if 0 < len(t) <= RESEARCH_CHARS][:RESEARCH_MAX])
 
 
-def design(wd: WorkDir, provider: Provider, overwrite: bool = False) -> Design:
+@dataclass(frozen=True)
+class DesignDefaults:
+    register: str
+    drop_list: str
+    avoid: list[str]
+    skip_max: int
+    aside_max: int
+    forms: str
+    rules: list[Rule]
+
+
+def design(wd: WorkDir, provider: Provider, defaults: DesignDefaults, overwrite: bool = False) -> Design:
     if wd.design_file.exists() and not overwrite:
         raise StepError(f"{wd.design_file} はすでにあります。作り直すなら --overwrite を付けてください")
     p = wd.project()
     units = wd.units()
     if any(u.searchable is None for u in units if u.origin == "material"):
         raise StepError("目印の無い単位があります。先に `kumimasu mark` を実行してください")
-    cfg = load(wd.root)
-    forms = cfg.get("defaults.forms") or ""
-    d = parse_design(provider.complete(design_prompt(p, units, forms), json_schema=design_schema()), p, units,
-                     cfg.rules_path())
-    d = d.model_copy(update={"formality": cfg.get("defaults.register"), "drop_list": cfg.get("defaults.drop_list"),
-                             "form_prefs": forms})
-    d = propose_noise(d, p, units, baseline_text(wd), provider, cfg.get("defaults.noise.skip_max"),
-                      cfg.get("defaults.noise.aside_max"))
-    d = review(d, p, units, provider)
-    d = d.model_copy(update={"avoid": merge_avoid(cfg.get("defaults.avoid") or [], d.avoid)})
+    d = parse_design(ask_json(provider, design_prompt(p, units, defaults.forms), design_schema()), p, units,
+                     defaults.rules)
+    d = d.model_copy(update={"formality": defaults.register, "drop_list": defaults.drop_list,
+                             "form_prefs": defaults.forms})
+    d = propose_noise(d, p, units, baseline_text(wd), provider, defaults.skip_max, defaults.aside_max)
+    d = find_conflicts(d, p, units, provider)
+    d = d.model_copy(update={"avoid": merge_avoid(defaults.avoid, d.avoid)})
     wd.save_design(d)
     return d
 
@@ -152,19 +138,13 @@ NOISE_PROMPT_JA = DATA_NOTE_JA + """
 {units}"""
 
 
-def noise_schema(skip_max: int = SKIP_MAX, aside_max: int = ASIDE_MAX) -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["skip", "aside"], "properties": {
-        "skip": {"type": "array", "maxItems": skip_max, "items": {
-            "type": "object", "additionalProperties": False, "required": ["label", "units", "why"],
-            "properties": {"label": {"type": "string"}, "units": {"type": "array", "items": {"type": "string"}},
-                           "why": {"type": "string"}}}},
-        "aside": {"type": "array", "maxItems": aside_max, "items": {
-            "type": "object", "additionalProperties": False, "required": ["id", "where", "why"],
-            "properties": {"id": {"type": "string"}, "where": {"type": "string"}, "why": {"type": "string"}}}}}}
+def noise_schema(skip_max: int, aside_max: int) -> dict:
+    return obj(skip=arr(obj(label=STR, units=arr(STR), why=STR), skip_max),
+               aside=arr(obj(id=STR, where=STR, why=STR), aside_max))
 
 
-def noise_prompt(p: Project, d: Design, units: list[Unit], baseline: str, skip_max: int = SKIP_MAX,
-                 aside_max: int = ASIDE_MAX) -> str:
+def noise_prompt(p: Project, d: Design, units: list[Unit], baseline: str, skip_max: int,
+                 aside_max: int) -> str:
     lines = unit_lines(units, with_context=True)
     for u in units:
         lines = lines.replace(f"[{u.id}]", f"[{u.id}]（use: {d.use_of(u.id)}）", 1)
@@ -175,11 +155,10 @@ def noise_prompt(p: Project, d: Design, units: list[Unit], baseline: str, skip_m
 LABEL_MAX = 30
 
 
-def parse_noise(raw: str, d: Design, units: list[Unit], skip_max: int = SKIP_MAX, aside_max: int = ASIDE_MAX) -> Design:
-    data = extract_json(raw)
+def parse_noise(data: dict, d: Design, units: list[Unit], skip_max: int, aside_max: int) -> Design:
     by_id = {u.id: u for u in units}
     skips, taken = [], set()
-    for row in data.get("skip", []):
+    for row in rows(data, "skip"):
         label = str(row.get("label", "")).strip()
         ids = [i for i in row.get("units", []) if i in by_id and by_id[i].origin == "material"
                and by_id[i].searchable in ("yes", "partial") and d.use_of(i) != "deep" and i not in taken]
@@ -187,7 +166,7 @@ def parse_noise(raw: str, d: Design, units: list[Unit], skip_max: int = SKIP_MAX
             taken.update(ids)
             skips.append(Skip(label=label, units=ids, why=str(row.get("why", ""))))
     asides = []
-    for row in data.get("aside", []):
+    for row in rows(data, "aside"):
         i = row.get("id")
         u = by_id.get(i)
         if u and u.firsthand and d.use_of(i) == "mention" and i not in taken and len(asides) < aside_max \
@@ -210,20 +189,18 @@ def apply_noise(d: Design) -> Design:
 
 
 def propose_noise(d: Design, p: Project, units: list[Unit], baseline: str, provider: Provider,
-                  skip_max: int = SKIP_MAX, aside_max: int = ASIDE_MAX) -> Design:
+                  skip_max: int, aside_max: int) -> Design:
     d = sync_design(d, units)
-    raw = provider.complete(noise_prompt(p, d, units, baseline, skip_max, aside_max),
-                            json_schema=noise_schema(skip_max, aside_max))
-    return parse_noise(raw, d, units, skip_max, aside_max)
+    data = ask_json(provider, noise_prompt(p, d, units, baseline, skip_max, aside_max), noise_schema(skip_max, aside_max))
+    return parse_noise(data, d, units, skip_max, aside_max)
 
 
-def noise_workdir(wd: WorkDir, provider: Provider) -> Design:
+def noise_workdir(wd: WorkDir, provider: Provider, skip_max: int, aside_max: int) -> Design:
     units = wd.units()
     p = wd.project()
-    cfg = load(wd.root)
-    d = propose_noise(wd.design(), p, units, baseline_text(wd), provider, cfg.get("defaults.noise.skip_max"),
-                      cfg.get("defaults.noise.aside_max"))
-    d = review(d, p, units, provider).model_copy(update={"avoid": wd.design().avoid})
+    old = wd.design()
+    d = propose_noise(old, p, units, baseline_text(wd), provider, skip_max, aside_max)
+    d = find_conflicts(d, p, units, provider).model_copy(update={"avoid": old.avoid})
     wd.save_design(d)
     return d
 
@@ -249,12 +226,8 @@ REVIEW_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def review_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["conflicts", "avoid"], "properties": {
-        "conflicts": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["id", "level", "by", "note"],
-            "properties": {"id": {"type": "string"}, "level": {"type": "string", "enum": ["yes", "partial", "no"]},
-                           "by": {"type": "array", "items": {"type": "string"}}, "note": {"type": "string"}}}},
-        "avoid": {"type": "array", "items": {"type": "string"}, "maxItems": 6}}}
+    return obj(conflicts=arr(obj(id=STR, level=enum("yes", "partial", "no"), by=arr(STR), note=STR)),
+               avoid=arr(STR, AVOID_MAX))
 
 
 def review_prompt(p: Project, d: Design, units: list[Unit]) -> str:
@@ -267,30 +240,29 @@ def review_prompt(p: Project, d: Design, units: list[Unit]) -> str:
 AVOID_MAX_CHARS = 30
 
 
-def parse_review(raw: str, d: Design) -> Design:
-    data = extract_json(raw)
+def parse_review(data: dict, d: Design) -> Design:
     conflicts, seen = [], set()
-    for row in data.get("conflicts", []):
+    for row in rows(data, "conflicts"):
         cid, level = row.get("id"), row.get("level")
         by = [b for b in row.get("by", []) if d.use_of(b) in ("deep", "mention")][:4]
         if level in ("yes", "partial") and d.use_of(cid) == "drop" and by and cid not in seen:
             seen.add(cid)
             conflicts.append(Conflict(id=cid, by=by, level=level, note=str(row.get("note", ""))[:40]))
-    avoid = [a.strip() for a in data.get("avoid", []) if 0 < len(str(a).strip()) <= AVOID_MAX_CHARS][:6]
+    avoid = [a for a in strings(data, "avoid") if 0 < len(a) <= AVOID_MAX_CHARS][:AVOID_MAX]
     return d.model_copy(update={"conflicts": conflicts, "avoid": avoid, "avoid_proposed": avoid})
 
 
-def review(d: Design, p: Project, units: list[Unit], provider: Provider) -> Design:
+def find_conflicts(d: Design, p: Project, units: list[Unit], provider: Provider) -> Design:
     d = sync_design(d, units)
     if not any(d.use_of(u.id) == "drop" for u in units):
         return d.model_copy(update={"conflicts": []})
-    return parse_review(provider.complete(review_prompt(p, d, units), json_schema=review_schema()), d)
+    return parse_review(ask_json(provider, review_prompt(p, d, units), review_schema()), d)
 
 
-def review_workdir(wd: WorkDir, provider: Provider, keep_avoid: bool = False) -> Design:
+def review_conflicts(wd: WorkDir, provider: Provider, keep_avoid: bool = False) -> Design:
     units = wd.units()
     old = wd.design()
-    d = review(old, wd.project(), units, provider)
+    d = find_conflicts(old, wd.project(), units, provider)
     if keep_avoid:
         d = d.model_copy(update={"avoid": old.avoid})
     wd.save_design(d)

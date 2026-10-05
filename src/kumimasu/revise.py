@@ -74,7 +74,8 @@ def revise_prompt(block: str, draft: str, todo: list[str], research: Research | 
     ] if x)
 
 
-def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None, fetch: Fetch | None = None,
+def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None, roles: dict[str, str],
+           fetch: Fetch | None = None,
            src: str = "draft.md", dst: str = "draft.v2.md") -> tuple[CheckReport | None, list[str]]:
     rep_path = wd.root / (src.removesuffix(".md").replace("draft", "check") + ".json")
     if rep_path.exists() and rep_path.stat().st_mtime >= (wd.root / src).stat().st_mtime:
@@ -88,6 +89,6 @@ def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None
         return None, []
     prompt = revise_prompt(design_block(p, d, units), wd.read(src), todo, load_research(wd))
     wd.write(dst.replace(".md", ".prompt.md"), prompt)
-    write_used(wd, dst, d, d.drop_list, {"writer": f"{writer.name}:{writer.model}"})
+    write_used(wd, dst, d, d.drop_list, roles | {"writer": f"{writer.name}:{writer.model}"})
     wd.write(dst, article_from(writer.complete(prompt)))
     return check(wd, judge, meta, dst, fetch), todo

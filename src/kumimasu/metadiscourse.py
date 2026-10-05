@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import itertools
 import re
 
 from pydantic import BaseModel
+
+from .textutil import code_free_lines, sentences
 
 CATEGORIES: dict[str, str] = {
     "signpost": "道しるべ。先の展開や結論の位置を予告・確認するだけの文（「先に結論を述べます」「以下では〜を見ていきます」"
@@ -37,13 +40,12 @@ _HEADING_ASSERTIVE = re.compile(r"(ない|だ|である|です|ます|ません|
 _HEADING_TOPIC = re.compile(r"[^とに]は|が")
 _HEADING_NOUNISH = re.compile(r"(とは|か|まとめ|はじめに|おわりに|について|かた|方|しくみ|仕組み|\?|？)$")
 LEADS = {"list": "箇条書き", "table": "表", "code": "コード"}
-_SENT_SPLIT = re.compile(r"(?<=[。！？!?])")
 _LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 _MARKUP = re.compile(r"\*\*|__|`")
 
 
-class Unit(BaseModel):
+class Sentence(BaseModel):
     id: str
     kind: str
     text: str
@@ -63,80 +65,58 @@ class Hit(BaseModel):
     source: str = ""
 
 
-def section_level(markdown: str) -> int:
-    levels = [len(m[1]) for m in (HEADING_RE.match(ln) for ln in code_free_lines(markdown)) if m]
+def section_level(lines: list[str]) -> int:
+    levels = [len(m[1]) for m in (HEADING_RE.match(ln) for ln in lines) if m]
     inner = [lv for lv in levels if lv > 1] if levels and levels[0] == 1 else levels
     return min(inner) if inner else 2
 
 
-def code_free_lines(markdown: str) -> list[str]:
-    out, fence = [], False
-    for ln in markdown.splitlines():
-        if ln.lstrip().startswith(("```", "~~~")):
-            fence = not fence
-            out.append("")
-            continue
-        out.append("" if fence else ln)
-    return out
+_SKIPPED = ("|", ">", "<", "![")
 
 
-def sentences(text: str) -> list[str]:
-    flat = re.sub(r"\s*\n\s*", "", text.strip())
-    return [s.strip() for s in _SENT_SPLIT.split(flat) if len(s.strip()) >= 2]
-
-
-def split_units(markdown: str) -> list[Unit]:
-    level = section_level(markdown)
-    units: list[Unit] = []
+def split_sentences(markdown: str) -> list[Sentence]:
+    raw = markdown.split("\n")
+    lines = code_free_lines(markdown)
+    level = section_level(lines)
+    out: list[Sentence] = []
     section, heading = -1, ""
     block: list[str] = []
-    n_m = n_h = 0
-
-    raw = markdown.splitlines()
+    in_list = False
+    n_sent, n_head = itertools.count(1), itertools.count(1)
 
     def flush(at: int) -> None:
-        nonlocal n_m, block
-        text = "\n".join(block)
-        in_list = bool(block) and block_is_item
-        block = []
-        sents = sentences(text)
+        sents = sentences("\n".join(block))
         following = "" if in_list else _next_block(raw, at)
         for i, s in enumerate(sents):
-            n_m += 1
             last = i == len(sents) - 1
-            units.append(Unit(id=f"M{n_m}", kind="sentence", text=s, section=section, heading=heading,
-                              paragraph_end=last, leads_into=following if last else ""))
+            out.append(Sentence(id=f"M{next(n_sent)}", kind="sentence", text=s,
+                                section=section, heading=heading, paragraph_end=last,
+                                leads_into=following if last else ""))
 
-    block_is_item = False
-    for at, ln in enumerate(code_free_lines(markdown)):
+    for at, ln in enumerate(lines):
         m = HEADING_RE.match(ln)
-        if block and (m or not ln.strip() or ln.lstrip().startswith(("|", ">", "<", "![")) or _LIST_MARK.match(ln)):
+        if block and (m or not ln.strip() or ln.lstrip().startswith(_SKIPPED) or _LIST_MARK.match(ln)):
             flush(at)
+            block = []
         if m:
             if len(m[1]) == 1:
                 continue
             if len(m[1]) <= level:
                 section, heading = section + 1, m[2]
-            n_h += 1
-            units.append(Unit(id=f"H{n_h}", kind="heading", text=m[2], section=section, heading=heading))
-            continue
-        if not ln.strip() or ln.lstrip().startswith(("|", ">", "<", "![")):
-            continue
-        if _LIST_MARK.match(ln):
-            block, block_is_item = [_LIST_MARK.sub("", ln)], True
-            continue
-        if not block:
-            block_is_item = False
-        block.append(ln.strip())
+            out.append(Sentence(id=f"H{next(n_head)}", kind="heading", text=m[2],
+                                section=section, heading=heading))
+        elif ln.strip() and not ln.lstrip().startswith(_SKIPPED):
+            if _LIST_MARK.match(ln):
+                block, in_list = [_LIST_MARK.sub("", ln)], True
+            else:
+                in_list = in_list and bool(block)
+                block.append(ln.strip())
     if block:
         flush(len(raw))
-    last: dict[int, Unit] = {}
-    for u in units:
-        if u.kind == "sentence":
-            last[u.section] = u
+    last = {u.section: u for u in out if u.kind == "sentence"}
     for u in last.values():
         u.section_end = True
-    return units
+    return out
 
 
 def _next_block(raw: list[str], at: int) -> str:
@@ -154,7 +134,7 @@ def _next_block(raw: list[str], at: int) -> str:
     return ""
 
 
-def rule_hits(units: list[Unit]) -> list[Hit]:
+def rule_hits(units: list[Sentence]) -> list[Hit]:
     out = []
     for u in units:
         cat = None

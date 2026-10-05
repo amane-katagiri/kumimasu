@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from .errors import StepError
 from .generate import DATA_NOTE_JA
-from .llm import extract_json
+from .llm import STR, arr, ask_json, obj, rows
 from .model import Interview, Project, Question, Unit
 from .workdir import WorkDir, merge_clusters
 
@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
 SEARCHABLE_LABEL = {"yes": "検索で届く", "partial": "一部は検索で届く", "no": "手元だけ", None: "未判定"}
 UNIT_SHOWN = 400
+QUESTIONS_MIN = 4
+QUESTIONS_MAX = 6
 
 
 def unit_lines(units: list[Unit], with_mark: bool = True, with_context: bool = False) -> str:
@@ -54,22 +56,18 @@ INTERVIEW_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def interview_schema(n_max: int) -> dict:
-    q = {"type": "object", "additionalProperties": False, "required": ["question", "why", "units"],
-         "properties": {"question": {"type": "string"}, "why": {"type": "string"},
-                        "units": {"type": "array", "items": {"type": "string"}}}}
-    return {"type": "object", "additionalProperties": False, "required": ["questions"],
-            "properties": {"questions": {"type": "array", "items": q, "maxItems": n_max}}}
+    return obj(questions=arr(obj(question=STR, why=STR, units=arr(STR)), n_max))
 
 
-def interview_prompt(p: Project, units: list[Unit], n_min: int = 4, n_max: int = 6) -> str:
+def interview_prompt(p: Project, units: list[Unit], n_min: int = QUESTIONS_MIN, n_max: int = QUESTIONS_MAX) -> str:
     return INTERVIEW_PROMPT_JA.format(topic=p.topic, audience=p.audience, kind=p.kind, n_min=n_min, n_max=n_max,
                                       units=unit_lines(units))
 
 
-def parse_questions(raw: str, units: list[Unit], n_max: int = 6) -> Interview:
+def parse_questions(data: dict, units: list[Unit], n_max: int = QUESTIONS_MAX) -> Interview:
     ids = {u.id for u in units}
     qs = []
-    for row in extract_json(raw).get("questions", [])[:n_max]:
+    for row in rows(data, "questions")[:n_max]:
         text = str(row.get("question", "")).strip()
         if text:
             qs.append(Question(id=f"q{len(qs) + 1}", question=text, why=str(row.get("why", "")).strip(),
@@ -77,16 +75,14 @@ def parse_questions(raw: str, units: list[Unit], n_max: int = 6) -> Interview:
     return Interview(questions=qs)
 
 
-def interview(wd: WorkDir, provider: Provider, overwrite: bool = False) -> Interview:
+def interview(wd: WorkDir, provider: Provider, always_ask: list[str], overwrite: bool = False) -> Interview:
     if wd.interview_file.exists() and not overwrite:
         old = wd.interview()
         if any(q.answer.strip() for q in old.questions):
             raise StepError(f"{wd.interview_file} にはもう回答があります。作り直すなら --overwrite を付けてください")
     units = merge_clusters(wd.material_units())
-    raw = provider.complete(interview_prompt(wd.project(), units), json_schema=interview_schema(6))
-    from .config import load
-
-    iv = with_always_ask(parse_questions(raw, units), load(wd.root).get("interview.always_ask") or [])
+    data = ask_json(provider, interview_prompt(wd.project(), units), interview_schema(QUESTIONS_MAX))
+    iv = with_always_ask(parse_questions(data, units), always_ask)
     wd.save_interview(iv)
     return iv
 

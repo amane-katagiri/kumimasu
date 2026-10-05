@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from .design import sync_design
@@ -83,14 +84,14 @@ def draft_prompt(p: Project, d: Design, units: list[Unit], drop_list: str | None
                                     SOURCES_RULES_JA, OUTPUT_FORMAT_JA) if x)
 
 
-def draft(wd: WorkDir, writer: Provider, name: str = "draft.md", drop_list: str | None = None,
+def draft(wd: WorkDir, writer: Provider, roles: dict[str, str], name: str = "draft.md", drop_list: str | None = None,
           research: Research | None = None) -> str:
     p = wd.project()
     units = wd.units()
     d = sync_design(wd.design(), units)
     prompt = draft_prompt(p, d, units, drop_list, research)
     wd.write(name.replace(".md", ".prompt.md"), prompt)
-    write_used(wd, name, d, drop_list or d.drop_list, {"writer": f"{writer.name}:{writer.model}"})
+    write_used(wd, name, d, drop_list or d.drop_list, roles | {"writer": f"{writer.name}:{writer.model}"})
     text = article_from(writer.complete(prompt))
     wd.write(name, text)
     return text
@@ -102,19 +103,14 @@ def used_name(draft_name: str) -> str:
 
 def write_used(wd: WorkDir, draft_name: str, d: Design, drop_list: str, providers: dict[str, str]) -> dict:
     """What this draft was written with, so the final check and the handoff can show it."""
-    from .config import ROLES, load
-
-    cfg = load(wd.root)
     used = {"draft": draft_name, "rules": d.active_rules(), "rules_off": [r.text for r in d.rules if not r.on],
             "avoid": d.avoid, "register": d.formality, "drop_list": drop_list, "forms": d.forms,
             "form_prefs": d.form_prefs, "skip": [s.label for s in d.skip], "aside": [a.id for a in d.aside],
-            "providers": {r: cfg.provider(r) for r in ROLES} | providers, "design": wd.design_file.name}
+            "providers": providers, "design": wd.design_file.name}
     wd.write_json(used_name(draft_name), used)
     return used
 
 
 def read_used(wd: WorkDir, draft_name: str) -> dict | None:
-    import json
-
     path = wd.root / used_name(draft_name)
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None

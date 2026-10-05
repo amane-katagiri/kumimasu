@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import serving
+from conftest import always_ask, defaults, roles, serving
 from typer.testing import CliRunner
 
-from kumimasu import cli as cli_mod
+from kumimasu import cli_common as cc
 from kumimasu.check import check, dash_hits, number_flags
 from kumimasu.cli import app
 from kumimasu.design import design, sync_design
@@ -22,8 +22,9 @@ from kumimasu.interview import interview
 from kumimasu.llm import FakeProvider, get_provider
 from kumimasu.mark import mark
 from kumimasu.model import Design, Project, UnitUse
-from kumimasu.polish import Flag, apply_replacements, blocks, neighborhood, polish
+from kumimasu.polish import Flag, apply_replacements, neighborhood, polish
 from kumimasu.revise import instructions, revise
+from kumimasu.textutil import blocks
 from kumimasu.workdir import WorkDir, init_workdir
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -141,7 +142,7 @@ def wd(tmp_path) -> WorkDir:
 def answered(w: WorkDir, p=None) -> None:
     p = p or scripted()
     mark(w, p, p)
-    interview(w, p)
+    interview(w, p, always_ask())
     iv = w.interview()
     iv.questions[0].answer = "撮影日が無い写真が LINE 経由だけだったのが意外だった"
     w.save_interview(iv)
@@ -177,10 +178,10 @@ def test_mark_writes_baseline_and_searchable(wd):
 
 
 def test_web_provider_gets_tools_only_for_claude_cli(tmp_path):
-    cached = cli_mod._provider("claude-cli:opus", web=True, cache_dir=str(tmp_path))
+    cached = cc.provider("claude-cli:opus", web=True, cache_dir=str(tmp_path))
     assert cached.inner.allowed_tools == ("WebSearch", "WebFetch") and cached.dir == tmp_path
-    assert cli_mod._provider("claude-cli:sonnet").allowed_tools == ()
-    assert isinstance(cli_mod._provider("fake", web=True), FakeProvider)
+    assert cc.provider("claude-cli:sonnet").allowed_tools == ()
+    assert isinstance(cc.provider("fake", web=True), FakeProvider)
     assert get_provider("fake").name == "fake"
 
 
@@ -195,17 +196,17 @@ def test_interview_questions_and_answers_become_units(wd):
     assert "問い" not in ans[0].text and "EXIF が消えている" in ans[0].context
     assert [u.id for u in wd.units()][-1] == "q1"
     with pytest.raises(StepError):
-        interview(wd, scripted())
-    interview(wd, scripted(), overwrite=True)
+        interview(wd, scripted(), always_ask())
+    interview(wd, scripted(), always_ask(), overwrite=True)
     assert wd.answer_units() == []
 
 
 def test_design_defaults_and_limits(wd):
     p = scripted()
     with pytest.raises(StepError):
-        design(wd, p)
+        design(wd, p, defaults())
     answered(wd, p)
-    d = design(wd, p)
+    d = design(wd, p, defaults())
     uses = {u.id: u.use for u in d.units}
     assert len(d.takeaways) == 3 and d.target_length == 600 and d.formality == "keitai"
     assert uses["m2"] == "drop" and uses["m4"] == "deep" and uses["q1"] == "deep" and "zz" not in uses
@@ -220,7 +221,7 @@ def test_design_defaults_and_limits(wd):
     design_text = next(c["prompt"] for c in p.calls if "記事の設計を提案" in c["prompt"])
     assert "問い: m4 の LINE" in design_text and "選び方の指示" in design_text
     with pytest.raises(StepError):
-        design(wd, p)
+        design(wd, p, defaults())
 
 
 def test_sync_design_adds_late_answers_and_removes_gone_units(wd):
@@ -234,7 +235,7 @@ def test_sync_design_adds_late_answers_and_removes_gone_units(wd):
 def test_draft_prompt_sections(wd):
     p = scripted()
     answered(wd, p)
-    design(wd, p)
+    design(wd, p, defaults())
     d, units = wd.design(), wd.units()
     prompt = draft_prompt(wd.project(), d, units)
     deep_part = prompt.split("## 掘り下げる材料", 1)[1].split("## 触れる材料", 1)[0]
@@ -248,14 +249,14 @@ def test_draft_prompt_sections(wd):
     assert "書かない" not in draft_prompt(wd.project(), d, units, "none").split("## 決まり")[0].split("## 触れる材料")[1]
     assert "敬体" in prompt and "ウェブは使えません" in prompt and "<article>" in prompt and "FAQ" in prompt
     assert prompt.startswith("この依頼に含まれる材料")
-    text = draft(wd, p)
+    text = draft(wd, p, roles())
     assert text == GOOD_DRAFT and (wd.root / "draft.prompt.md").exists()
 
 
 def _ready(wd, p):
     answered(wd, p)
-    design(wd, p)
-    draft(wd, p)
+    design(wd, p, defaults())
+    draft(wd, p, roles())
 
 
 def test_check_passes_the_design_relations(wd):
@@ -300,7 +301,7 @@ def test_check_flags_violations(wd):
 def test_design_proposes_skips_and_asides(wd):
     p = scripted()
     answered(wd, p)
-    d = design(wd, p)
+    d = design(wd, p, defaults())
     assert [(x.label, x.units) for x in d.skip] == [("EXIF とは何か", ["m2"]), ("タイムゾーンの仕組み", [])]
     assert [(a.id, a.where) for a in d.aside] == [("m7", "名前を付け終えたあと")]
     assert d.use_of("m2") == "drop" and d.use_of("m7") == "mention"
@@ -318,18 +319,18 @@ def test_design_proposes_skips_and_asides(wd):
 def test_noise_keeps_other_uses(wd):
     p = scripted()
     answered(wd, p)
-    design(wd, p)
+    design(wd, p, defaults())
     d = wd.design()
     d = d.model_copy(update={"skip": [], "aside": [],
                              "units": [u.model_copy(update={"use": "deep"}) if u.id == "m10" else u for u in d.units]})
     wd.save_design(d)
     from kumimasu.design import noise_workdir
 
-    d2 = noise_workdir(wd, p)
+    d2 = noise_workdir(wd, p, 3, 2)
     assert d2.use_of("m10") == "deep" and [a.id for a in d2.aside] == ["m7"] and d2.avoid == d.avoid
     wd.save_design(d2.model_copy(update={"aside": [],
                                          "units": [u.model_copy(update={"use": "drop"}) if u.id == "m7" else u for u in d2.units]}))
-    d3 = noise_workdir(wd, p)
+    d3 = noise_workdir(wd, p, 3, 2)
     assert d3.aside == [] and d3.use_of("m7") == "drop"
 
 
@@ -477,7 +478,7 @@ def test_off_rules_stay_in_design_but_not_in_prompt(wd):
 
     p = scripted()
     answered(wd, p)
-    d = design(wd, p)
+    d = design(wd, p, defaults())
     d = d.model_copy(update={"rules": [Rule(text="使うルール"), Rule(text="止めたルール", on=False), Rule(text=" ")]})
     wd.save_design(d)
     again = wd.design()
@@ -524,7 +525,7 @@ def test_number_flags_cite_and_material():
 def test_revise_rewrites_once_and_rechecks(wd):
     p = scripted(draft_text=BAD_DRAFT, present_drop=True)
     _ready(wd, p)
-    rep, todo = revise(wd, p, p, None)
+    rep, todo = revise(wd, p, p, None, roles())
     assert todo and rep is not None and rep.draft == "draft.v2.md"
     prompt = (wd.root / "draft.v2.prompt.md").read_text(encoding="utf-8")
     assert "# 直す点" in prompt and BAD_DRAFT.strip() in prompt
@@ -540,14 +541,14 @@ def test_revise_does_nothing_without_failures(wd):
     data = json.loads(rep_path.read_text(encoding="utf-8"))
     data["checks"] = [c for c in data["checks"] if c["passed"] is not False]
     rep_path.write_text(json.dumps(data), encoding="utf-8")
-    rep, todo = revise(wd, p, p, None)
+    rep, todo = revise(wd, p, p, None, roles())
     assert rep is None and todo == [] and not (wd.root / "draft.v2.md").exists()
 
 
 def test_server_state_answers_and_design(wd):
     p = scripted()
     mark(wd, p, p)
-    interview(wd, p)
+    interview(wd, p, always_ask())
     with serving(wd) as c:
         code, page = c.get("/")
         assert code == 200 and "インタビュー" in page
@@ -559,7 +560,7 @@ def test_server_state_answers_and_design(wd):
         assert wd.interview().questions[1].answer == "EXIF の無い写真の扱い"
         code, _ = c.put("/api/design", {"units": {"m1": "deep"}})
         assert code == 409
-        design(wd, p)
+        design(wd, p, defaults())
         from kumimasu import ops
 
         ops.set_stage(wd, "design")
@@ -590,7 +591,7 @@ def test_server_state_answers_and_design(wd):
 
 def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):
     p = scripted(draft_text=BAD_DRAFT, present_drop=True)
-    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: p)
+    monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: p)
     d = tmp_path / "run"
     r = CliRunner()
 
@@ -684,7 +685,7 @@ def test_research_gets_no_material_and_the_writer_gets_no_tools(wd, tmp_path, mo
     p = scripted()
     answered(wd, p)
     ops.set_stage(wd, "design")
-    d = design(wd, p)
+    d = design(wd, p, defaults())
     assert d.research == ["exiftool の -d の書式"]
     ops.set_stage(wd, "drafting")
     res = research(wd, p, d)
@@ -697,7 +698,7 @@ def test_research_gets_no_material_and_the_writer_gets_no_tools(wd, tmp_path, mo
     text = draft_prompt(wd.project(), d, wd.units(), research=res)
     assert "exiftool の -d は strftime の書式を受け取る。（出典: https://exiftool.org/filename.html）" in text
     seen = []
-    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: seen.append((spec, web)) or p)
+    monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: seen.append((spec, web)) or p)
     runner = CliRunner()
     res = runner.invoke(app, ["draft", str(wd.root), "--new-research"])
     assert res.exit_code == 0, res.output

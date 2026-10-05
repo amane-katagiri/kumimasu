@@ -10,7 +10,7 @@ import yaml
 from pydantic import BaseModel
 
 from .errors import StepError
-from .files import atomic_write, create_new
+from .files import atomic_write, create_new, dump_yaml
 from .model import Design, Interview, Project, Unit
 from .payload import InfoUnit, info_units
 
@@ -29,10 +29,6 @@ def check_draft_name(name: str) -> str:
 
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def dump_yaml(data) -> str:
-    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=1000)
 
 
 def code_units(text: str) -> list[tuple[str, str]]:

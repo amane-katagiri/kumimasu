@@ -4,6 +4,8 @@ import difflib
 import hashlib
 import json
 import re
+import secrets
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -11,14 +13,15 @@ from typing import TYPE_CHECKING, Literal
 import yaml
 from pydantic import BaseModel
 
-from .check import KEEP_FILE, CheckReport, check_stem, dash_hits, load_keep, text_hash
-from .files import atomic_write, create_new
+from .check import CheckReport, check_stem, dash_hits
+from .files import atomic_write, create_new, dump_yaml
 from .generate import DATA_NOTE_JA
-from .llm import extract_json
-from .parts.markdown import parse as parse_parts
+from .keep import KeepStore, text_hash
+from .llm import ask_replacements
 from .payload import info_units
 from .surface import SURFACE_CATEGORIES
-from .workdir import WorkDir, check_draft_name, dump_yaml, now
+from .textutil import apply_edits, code_ranges, locate, norm, overlaps, paragraph_at
+from .workdir import WorkDir, check_draft_name, now
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -57,28 +60,6 @@ class Review(BaseModel):
     updated_at: str = ""
 
 
-def norm(text: str) -> str:
-    return re.sub(r"\s+", "", text)
-
-
-def find_span(src: str, text: str, start: int = 0) -> tuple[int, int] | None:
-    """Locate text in the source ignoring whitespace and inline markup the sentence splitter keeps or drops."""
-    chars = [c for c in norm(text) if c not in "*_"]
-    if not chars:
-        return None
-    gap = r"[\s*_]*"
-    m = re.compile(gap.join(re.escape(c) for c in chars)).search(src, start)
-    return (m.start(), m.end()) if m else None
-
-
-def code_ranges(src: str) -> list[tuple[int, int]]:
-    return [p.span for p in parse_parts(src).parts() if p.kind == "code" and p.span]
-
-
-def _overlaps(a: int, b: int, ranges: list[tuple[int, int]]) -> bool:
-    return any(a < y and x < b for x, y in ranges)
-
-
 def _item_id(kind: str, category: str, text: str) -> str:
     return f"{kind}-{hashlib.sha1(f'{kind}|{category}|{norm(text)}'.encode()).hexdigest()[:10]}"
 
@@ -90,7 +71,7 @@ def _runs(detail: str) -> int | None:
 
 def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str]) -> list[Item]:
     out: dict[str, Item] = {}
-    dunits = info_units(src)
+    by_du = {d.id: d for d in info_units(src)}
     dashes = {norm(x) for x in dash_hits(src)}
 
     def add(kind: str, category: str, text: str, span: tuple[int, int] | None, **kw) -> None:
@@ -105,24 +86,24 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
             for it in c.items:
                 match c.id:
                     case "meta":
-                        add("meta", it["category"], it["text"], find_span(src, it["text"]),
+                        add("meta", it["category"], it["text"], locate(src, it["text"]),
                             votes=f"{it.get('votes', '')}/{n}" if n else "", reason=SURFACE_CATEGORIES.get(it["category"], ""))
                     case "glue":
-                        add("glue", "glue", it["text"], find_span(src, it["text"]),
+                        add("glue", "glue", it["text"], locate(src, it["text"]),
                             votes=f"{it.get('votes', '')}/{n}" if n else "", reason=SURFACE_CATEGORIES["glue"])
                     case "lint":
                         if it["rule"] == "dash" and norm(it["text"]) not in dashes:
                             continue
-                        add("lint", it["rule"], it["text"], find_span(src, it["text"]), reason=c.relation)
+                        add("lint", it["rule"], it["text"], locate(src, it["text"]), reason=c.relation)
                     case "drop_absent":
                         add("drop", it.get("status", ""), it["text"], None, reason=c.relation,
                             unit={"id": it["id"], "text": units.get(it["id"], it["text"])})
                     case "fabrication":
-                        du = next((d for d in dunits if d.id == it["unit"]), None)
+                        du = by_du.get(it["unit"])
                         add("fabrication", it.get("source", ""), it["text"],
-                            (du.start, du.end) if du else find_span(src, it["text"]), reason=c.detail)
+                            (du.start, du.end) if du else locate(src, it["text"]), reason=c.detail)
                     case "numbers":
-                        ctx = find_span(src, it["context"][:40])
+                        ctx = locate(src, it["context"][:40])
                         at = src.find(it["number"], ctx[0]) if ctx else src.find(it["number"])
                         add("number", "", it["context"], (at, at + len(it["number"])) if at >= 0 else None,
                             reason=c.relation)
@@ -131,14 +112,15 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
                             at = src.find(it["url"])
                             add("link", it.get("verdict", ""), it["url"], (at, at + len(it["url"])) if at >= 0 else None,
                                 reason=c.relation)
-    by_du = {d.id: d for d in dunits}
+    drops = {it.unit["id"]: it for it in out.values() if it.kind == "drop" and it.unit}
     for rep in reports:
         for du_id, ids in sorted(rep.sources.items()):
-            du = by_du.get(du_id)
-            for it in out.values():
-                if it.kind == "drop" and it.unit and it.unit["id"] in ids and it.start is None and du:
+            if (du := by_du.get(du_id)) is None:
+                continue
+            for uid in ids:
+                if (it := drops.get(uid)) is not None and it.start is None:
                     it.start, it.end = du.start, du.end
-    return sorted(out.values(), key=lambda i: (i.start is None, i.start or 0))
+    return sorted(out.values(), key=_order)
 
 
 def load_reports(wd: WorkDir, draft: str) -> list[CheckReport]:
@@ -155,13 +137,17 @@ def review_path(wd: WorkDir, draft: str):
     return wd.root / f"review.{draft.removesuffix('.md')}.yaml"
 
 
-def load_review(wd: WorkDir, draft: str) -> Review:
-    src = wd.read(draft)
+def _order(i: Item) -> tuple[bool, int]:
+    return i.start is None, i.start or 0
+
+
+def load_review(wd: WorkDir, draft: str, src: str | None = None) -> Review:
+    src = wd.read(draft) if src is None else src
     path = review_path(wd, draft)
     saved = Review.model_validate(yaml.safe_load(path.read_text(encoding="utf-8"))) if path.exists() else Review(draft=draft)
     by_id = {i.id: i for i in saved.items}
     units = {u.id: u.text for u in wd.units()}
-    keep = load_keep(wd)
+    keep = KeepStore(wd).hashes()
     items = []
     for it in items_from_checks(src, load_reports(wd, draft), units):
         old = by_id.get(it.id)
@@ -173,7 +159,30 @@ def load_review(wd: WorkDir, draft: str) -> Review:
     items += [i for i in saved.items if i.kind == "user" and i.start is not None and i.end is not None]
     for it in items:
         mark_flags(it, src)
-    return Review(draft=draft, items=sorted(items, key=lambda i: (i.start is None, i.start or 0)), updated_at=saved.updated_at)
+    return Review(draft=draft, items=sorted(items, key=_order), updated_at=saved.updated_at)
+
+
+@dataclass
+class ReviewContext:
+    wd: WorkDir
+    draft: str
+    src: str
+    review: Review
+
+    @classmethod
+    def load(cls, wd: WorkDir, draft: str) -> ReviewContext:
+        src = wd.read(draft)
+        return cls(wd, draft, src, load_review(wd, draft, src))
+
+    def needs_apply(self) -> bool:
+        meta = applied_path(self.wd, self.draft)
+        if not self.wd.is_plain_file(final_name(self.draft)) or not meta.is_file():
+            return True
+        return json.loads(meta.read_text(encoding="utf-8")).get("fingerprint") != apply_fingerprint(self.src, self.review)
+
+    def needs_rewrite_call(self, regenerate: tuple[str, ...] = ()) -> bool:
+        return any(i.decision == "rewrite" and not i.stale and (i.rewrite is None or i.id in regenerate)
+                   for i in self.review.items if i.start is not None)
 
 
 def current_text(it: Item, src: str) -> str:
@@ -198,9 +207,9 @@ def mark_flags(it: Item, src: str) -> None:
 def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Review:
     """Partial update: items in body["items"] are updated (new user-* ids are created from start/end);
     ids in body["remove"] (user items) are removed; everything else is left as it is."""
-    rev = load_review(wd, draft)
     src = wd.read(draft)
-    sent = {str(x.get("id")): x for x in body.get("items", [])}
+    rev = load_review(wd, draft, src)
+    sent = {str(x.get("id") or f"user-{secrets.token_hex(4)}"): x for x in body.get("items", [])}
     remove = {str(x) for x in body.get("remove", [])}
     known = {i.id for i in rev.items}
     items = []
@@ -214,15 +223,14 @@ def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Rev
         if iid in known:
             continue
         if not iid.startswith("user-"):
-            raise ValueError(f"unknown item id: {iid}")
+            raise ValueError(f"知らない項目です: {iid}")
         a, b = int(x["start"]), int(x["end"])
         if not 0 <= a < b <= len(src):
-            raise ValueError(f"{iid}: offsets outside the draft")
+            raise ValueError(f"{iid}: 位置が下書きの外です")
         it = Item(id=iid, kind="user", start=a, end=b, text=src[a:b])
         update_item(it, x, src, source)
         items.append(it)
-    rev = Review(draft=draft, items=sorted((Item.model_validate(i.model_dump()) for i in items),
-                                           key=lambda i: (i.start is None, i.start or 0)))
+    rev = Review(draft=draft, items=sorted(items, key=_order))
     for it in rev.items:
         mark_flags(it, src)
     save_review(wd, rev)
@@ -234,7 +242,7 @@ def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
     before = (it.decision, it.note, it.rewrite)
     decision = x.get("decision", it.decision)
     if decision not in ("", "keep", "delete", "rewrite"):
-        raise ValueError(f"decision must be keep, delete or rewrite: {decision}")
+        raise ValueError(f"決定は keep, delete, rewrite のどれかにしてください: {decision}")
     it.decision = decision
     it.note = str(x.get("note", it.note))
     if x.get("regenerate"):
@@ -248,65 +256,7 @@ def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
 
 
 def update_keep(wd: WorkDir, rev: Review) -> None:
-    p = wd.root / KEEP_FILE
-    rows = {r["hash"]: r for r in (yaml.safe_load(p.read_text(encoding="utf-8")) or [])} if p.exists() else {}
-    for it in rev.items:
-        if it.kind not in ("meta", "glue", "user"):
-            continue
-        h = text_hash(it.text)
-        if it.decision == "keep":
-            rows[h] = {"hash": h, "text": it.text}
-        else:
-            rows.pop(h, None)
-    atomic_write(p, dump_yaml(list(rows.values())))
-
-
-_EMPTY_LINE = re.compile(r"\s*(#{1,6}|[-*+]|\d+[.)]|>)?\s*")
-
-
-def _cleanup_at(text: str, at: int) -> str:
-    ls = text.rfind("\n", 0, at) + 1
-    le = text.find("\n", at)
-    le = len(text) if le < 0 else le
-    line = text[ls:le]
-    if _EMPTY_LINE.fullmatch(line):
-        return text[:ls] + text[le + 1:]
-    left, right = line[:at - ls], line[at - ls:]
-    if left[-1:] in (" ", "\t") and right[:1] in (" ", "\t"):
-        right = right.lstrip(" \t")
-    if not right:
-        left = left.rstrip(" \t")
-    if left and _EMPTY_LINE.fullmatch(left) and left.strip():
-        right = right.lstrip(" \t")
-    return text[:ls] + left + right + text[le:]
-
-
-def _collapse_blank_lines(text: str) -> str:
-    out, fence, blank = [], False, False
-    for line in text.split("\n"):
-        if line.lstrip().startswith(("```", "~~~")):
-            fence = not fence
-        if not fence and not line.strip():
-            if blank:
-                continue
-            blank = True
-        else:
-            blank = False
-        out.append(line)
-    return "\n".join(out).strip("\n") + "\n"
-
-
-def apply_edits(src: str, edits: list[tuple[int, int, str]]) -> str:
-    code = code_ranges(src)
-    taken: list[tuple[int, int]] = []
-    text = src
-    for a, b, new in sorted(edits, key=lambda e: (e[0], e[1]), reverse=True):
-        if _overlaps(a, b, taken) or _overlaps(a, b, code):
-            continue
-        taken.append((a, b))
-        text = text[:a] + new + text[b:]
-        text = _cleanup_at(text, a + len(new) if new else a)
-    return _collapse_blank_lines(text)
+    KeepStore(wd).update({it.text: it.decision == "keep" for it in rev.items if it.kind in ("meta", "glue", "user")})
 
 
 REWRITE_PROMPT_JA = DATA_NOTE_JA + """
@@ -322,23 +272,11 @@ REWRITE_PROMPT_JA = DATA_NOTE_JA + """
 {items}"""
 
 
-def rewrite_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["items"], "properties": {"items": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "replacement"],
-                                   "properties": {"id": {"type": "string"}, "replacement": {"type": "string"}}}}}}
-
-
-def _paragraph(src: str, a: int, b: int) -> str:
-    start = src.rfind("\n\n", 0, a)
-    end = src.find("\n\n", b)
-    return src[0 if start < 0 else start + 2:len(src) if end < 0 else end].strip()
-
-
 def rewrite_prompt(src: str, items: list[Item]) -> str:
     blocks = []
     for it in items:
         blocks.append(f"## 項目 {it.id}\n\n直す文:\n{src[it.start:it.end]}\n\n"
-                      + (f"著者のメモ: {it.note}\n\n" if it.note else "") + f"文脈（この段落の中の文です）:\n{_paragraph(src, it.start, it.end)}")
+                      + (f"著者のメモ: {it.note}\n\n" if it.note else "") + f"文脈（この段落の中の文です）:\n{paragraph_at(src, it.start, it.end)}")
     return REWRITE_PROMPT_JA.format(items="\n\n".join(blocks))
 
 
@@ -413,13 +351,6 @@ def apply_fingerprint(src: str, rev: Review) -> str:
     return hashlib.sha256(json.dumps([src, rows], ensure_ascii=False).encode()).hexdigest()
 
 
-def needs_apply(wd: WorkDir, base: str) -> bool:
-    meta = applied_path(wd, base)
-    if not (wd.root / final_name(base)).is_file() or not meta.is_file():
-        return True
-    stored = json.loads(meta.read_text(encoding="utf-8")).get("fingerprint")
-    return stored != apply_fingerprint(wd.read(base), load_review(wd, base))
-
 
 def base_drafts(wd: WorkDir) -> list[str]:
     return sorted(p.name for p in wd.root.glob("draft*.md")
@@ -453,33 +384,29 @@ def export_final(wd: WorkDir, base: str, to_dir: Path, stamp: datetime | None = 
             dest, n = to_dir / f"{stem}-{n}.md", n + 1
 
 
-def needs_rewrite_call(wd: WorkDir, draft: str, regenerate: tuple[str, ...] = ()) -> bool:
-    return any(i.decision == "rewrite" and not i.stale and (i.rewrite is None or i.id in regenerate)
-               for i in load_review(wd, draft).items if i.start is not None)
-
-
-def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate: tuple[str, ...] = ()) -> ApplyResult:
+def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate: tuple[str, ...] = (),
+                 ctx: ReviewContext | None = None) -> ApplyResult:
     require_base(draft)
-    src = wd.read(draft)
-    rev = load_review(wd, draft)
+    ctx = ctx or ReviewContext.load(wd, draft)
+    src, rev = ctx.src, ctx.review
     for it in rev.items:
         if it.id in regenerate:
             it.rewrite = None
             mark_flags(it, src)
     code = code_ranges(src)
     placed = [i for i in rev.items if i.start is not None and i.end is not None]
-    skipped = [i.id for i in placed if i.decision in ("delete", "rewrite") and _overlaps(i.start, i.end, code)]
+    skipped = [i.id for i in placed if i.decision in ("delete", "rewrite") and overlaps(i.start, i.end, code)]
     stale = [i.id for i in rev.items if i.decision in ("delete", "rewrite") and i.stale and i.id not in skipped]
-    dels = [i for i in placed if i.decision == "delete" and i.id not in skipped + stale]
-    rews = [i for i in placed if i.decision == "rewrite" and i.id not in skipped + stale]
+    left_out = {*skipped, *stale}
+    dels = [i for i in placed if i.decision == "delete" and i.id not in left_out]
+    rews = [i for i in placed if i.decision == "rewrite" and i.id not in left_out]
     fresh = [i for i in rews if i.rewrite is None]
     calls = 0
     if fresh:
         if provider is None:
             raise ValueError("結果の無い書き直す項目があるので、書き直しの provider が要ります")
-        raw = provider.complete(rewrite_prompt(src, fresh), json_schema=rewrite_schema())
+        got = ask_replacements(provider, rewrite_prompt(src, fresh))
         calls = 1
-        got = {str(x.get("id")): str(x.get("replacement", "")).strip() for x in extract_json(raw).get("items", [])}
         for it in fresh:
             if it.id in got:
                 it.rewrite = Rewrite(result=got[it.id], source="llm", made_from=current_text(it, src), note=it.note)

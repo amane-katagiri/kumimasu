@@ -6,11 +6,17 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import always_ask, defaults
+from test_steps import PROJECT, SAMPLES, scripted
 from typer.testing import CliRunner
 
-from kumimasu import cli as cli_mod
+from kumimasu import cli_common as cc
+from kumimasu import ops
 from kumimasu.cli import app
 from kumimasu.config import ConfigError, init_template, load
+from kumimasu.design import design
+from kumimasu.interview import interview
+from kumimasu.mark import mark
 from kumimasu.model import Project
 from kumimasu.workdir import init_workdir
 
@@ -38,7 +44,7 @@ def test_defaults(places):
     assert cfg.cache_dir == str(Path(os.environ["HOME"]) / ".cache" / "kumimasu")
     assert cfg.get("surface.runs") == 3 and cfg.get("serve.port") == 8792 and cfg.rules_path() is None
     assert cfg.workdir_root == str(Path(os.environ["HOME"]) / ".cache" / "kumimasu" / "work")
-    assert cfg.source("cache_dir").startswith("default")
+    assert {r["key"]: r["layer"] for r in cfg.effective()}["cache_dir"] == "default"
 
 
 def test_precedence_and_relative_paths(places):
@@ -49,15 +55,15 @@ def test_precedence_and_relative_paths(places):
     p = yaml.safe_load((wdir / "project.yaml").read_text(encoding="utf-8"))
     p["config"] = {"providers": {"writer": "workdir-writer"}, "workdir_root": "tmpwork"}
     write(wdir / "project.yaml", p)
-    cfg = load(wdir, cwd, {"providers.writer": "cli-writer"})
-    assert cfg.provider("writer") == "cli-writer"
     cfg = load(wdir, cwd, trust=True)
+    assert cfg.provider("writer", "cli-writer") == "cli-writer" and cfg.resolve("surface.runs", None) == 5
     assert cfg.provider("writer") == "workdir-writer" and cfg.provider("judge") == "user-judge"
     assert cfg.get("surface.runs") == 5 and cfg.get("surface.min_votes") == 2
     assert cfg.cache_dir == str((cwd / "pcache").resolve()) and cfg.workdir_root == str((wdir / "tmpwork").resolve())
     assert load(None, cwd, trust=True).provider("writer") == "project-writer"
     assert load(None, cwd / "..").cache_dir == str((user.parent / "ucache").resolve())
-    assert cfg.source("providers.judge").startswith("user") and cfg.source("providers.writer").startswith("workdir")
+    layers = {r["key"]: r["layer"] for r in cfg.effective()}
+    assert layers["providers.judge"] == "user" and layers["providers.writer"] == "workdir"
 
 
 def test_project_and_workdir_layers_are_untrusted_for_sensitive_keys(places, monkeypatch):
@@ -84,13 +90,13 @@ def test_project_and_workdir_layers_are_untrusted_for_sensitive_keys(places, mon
 def test_errors_and_rules_file(places):
     cwd, _user, wdir = places
     write(cwd / "kumimasu.yaml", {"providers": {"nope": "x"}})
-    with pytest.raises(ConfigError, match="unknown key 'providers.nope'"):
+    with pytest.raises(ConfigError, match="知らないキー 'providers.nope'"):
         load(wdir, cwd)
     write(cwd / "kumimasu.yaml", {"surface": {"runs": "many"}})
-    with pytest.raises(ConfigError, match="surface.runs must be int"):
+    with pytest.raises(ConfigError, match="surface.runs は int"):
         load(wdir, cwd)
     write(cwd / "kumimasu.yaml", {"rules_file": "my-rules.yaml"})
-    with pytest.raises(ConfigError, match="does not exist"):
+    with pytest.raises(ConfigError, match="がありません"):
         load(wdir, cwd).rules_path()
     (cwd / "my-rules.yaml").write_text("- 一つだけのルール\n", encoding="utf-8")
     assert load(wdir, cwd).rules_path() == (cwd / "my-rules.yaml").resolve()
@@ -103,29 +109,22 @@ def test_errors_and_rules_file(places):
 
 
 def test_design_uses_rules_file(places):
-    from test_steps import PROJECT, SAMPLES, scripted
-
-    from kumimasu import ops
-    from kumimasu.design import design
-    from kumimasu.interview import interview
-    from kumimasu.mark import mark
-
     cwd, user, _ = places
     (cwd / "r.yaml").write_text("- 設定ファイルのルール\n", encoding="utf-8")
     write(user, {"rules_file": str(cwd / "r.yaml")})
     p = scripted()
     w, _ = init_workdir(cwd / "w", PROJECT, [SAMPLES / "notes.md"])
     mark(w, p, p)
-    interview(w, p)
+    interview(w, p, always_ask())
     ops.confirm(w, "agent-chat")
-    assert [r.text for r in design(w, p).rules] == ["設定ファイルのルール"]
+    assert [r.text for r in design(w, p, defaults()).rules] == ["設定ファイルのルール"]
 
 
 def test_cli_override_and_config_command(places, monkeypatch):
     cwd, _user, wdir = places
     write(cwd / "kumimasu.yaml", {"providers": {"interviewer": "fake:from-project"}, "cache_dir": "c"})
     seen = []
-    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: seen.append((spec, kw.get("cache_dir"))) or
+    monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: seen.append((spec, kw.get("cache_dir"))) or
                         __import__("kumimasu.llm", fromlist=["FakeProvider"]).FakeProvider(lambda p: '{"questions": []}'))
     r = CliRunner()
     assert r.invoke(app, ["interview", str(wdir)]).exit_code == 0

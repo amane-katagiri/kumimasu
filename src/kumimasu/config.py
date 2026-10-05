@@ -33,7 +33,7 @@ def _flatten(data: Any, where: str, prefix: str = "") -> dict[str, Any]:
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ConfigError(f"{where}: {prefix or 'the top level'} must be a mapping")
+        raise ConfigError(f"{where}: {prefix or '最上位'} は対応表（mapping）にしてください")
     out: dict[str, Any] = {}
     for k, v in data.items():
         key = f"{prefix}{k}"
@@ -42,7 +42,7 @@ def _flatten(data: Any, where: str, prefix: str = "") -> dict[str, Any]:
         elif key in KEYS:
             out[key] = v
         else:
-            raise ConfigError(f"{where}: unknown key {key!r} (known: {', '.join(KEYS)})")
+            raise ConfigError(f"{where}: 知らないキー {key!r} です（使えるキー: {', '.join(KEYS)}）")
     return out
 
 
@@ -52,14 +52,14 @@ def _coerce(key: str, value: Any, where: str, base: Path | None) -> Any:
     want = KEYS[key]
     if want is list:
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-            raise ConfigError(f"{where}: {key} must be a list of strings")
+            raise ConfigError(f"{where}: {key} は文字列のリストにしてください")
         return [x.strip() for x in value if x.strip()]
     try:
         value = want(value)
     except (TypeError, ValueError) as e:
-        raise ConfigError(f"{where}: {key} must be {want.__name__}") from e
+        raise ConfigError(f"{where}: {key} は {want.__name__} にしてください") from e
     if key in CHOICES and value not in CHOICES[key]:
-        raise ConfigError(f"{where}: {key} must be one of {', '.join(CHOICES[key])}")
+        raise ConfigError(f"{where}: {key} は {', '.join(CHOICES[key])} のどれかにしてください")
     if key in PATH_KEYS:
         p = Path(value).expanduser()
         if not p.is_absolute() and base is not None:
@@ -100,17 +100,17 @@ class Config:
                 return layer.values[key], layer
         return None, None
 
-    def get(self, key: str, override: Any = None) -> Any:
-        if override is not None:
-            return override
+    def get(self, key: str) -> Any:
         return self._pick(key)[0]
 
-    def provider(self, role: str, override: str | None = None) -> str:
-        return self.get(f"providers.{role}", override)
+    def resolve(self, key: str, cli_value: Any) -> Any:
+        return self.get(key) if cli_value is None else cli_value
 
-    def source(self, key: str) -> str:
-        layer = self._pick(key)[1]
-        return f"{layer.name} ({layer.path})" if layer else "-"
+    def provider(self, role: str, cli_value: str | None = None) -> str:
+        return self.resolve(f"providers.{role}", cli_value)
+
+    def roles(self) -> dict[str, str]:
+        return {r: self.provider(r) for r in ROLES}
 
     @property
     def cache_dir(self) -> str:
@@ -134,7 +134,7 @@ class Config:
             return p
         if layer is not None and layer.name == "default":
             return None
-        raise ConfigError(f"rules_file {p} does not exist (set in {layer.name if layer else '?'})")
+        raise ConfigError(f"rules_file の {p} がありません（{layer.name if layer else '?'} の設定）")
 
     def effective(self) -> list[dict]:
         rows = []
@@ -163,12 +163,9 @@ def trusted_by_env() -> bool:
     return os.environ.get(TRUST_ENV, "") not in ("", "0")
 
 
-def load(workdir: Path | None = None, cwd: Path | None = None, cli: dict[str, Any] | None = None,
-         trust: bool = False) -> Config:
+def load(workdir: Path | None = None, cwd: Path | None = None, trust: bool = False) -> Config:
     trust = trust or trusted_by_env()
     layers: list[Layer] = []
-    if cli:
-        layers.append(Layer("cli", "command line", {k: v for k, v in cli.items() if v is not None}))
     if workdir is not None and (workdir / "project.yaml").is_file():
         data = yaml.safe_load((workdir / "project.yaml").read_text(encoding="utf-8")) or {}
         where = str(workdir / "project.yaml")

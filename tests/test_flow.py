@@ -7,12 +7,12 @@ import time
 
 import pytest
 import yaml
-from conftest import serving
+from conftest import always_ask, defaults, roles, serving
 from test_steps import PROJECT, SAMPLES, scripted
 from typer.testing import CliRunner
 
 from kumimasu import auto as stand_in
-from kumimasu import cli as cli_mod
+from kumimasu import cli_common as cc
 from kumimasu import ops
 from kumimasu.cli import app
 from kumimasu.design import design
@@ -27,21 +27,21 @@ def make_wd(root, p=None) -> WorkDir:
     p = p or scripted()
     w, _ = init_workdir(root, PROJECT, [SAMPLES / "notes.md", SAMPLES / "rename.sh"])
     mark(w, p, p)
-    interview(w, p)
+    interview(w, p, always_ask())
     return w
 
 
 def to_design(w: WorkDir, p=None) -> None:
     p = p or scripted()
     ops.confirm(w, "agent-chat")
-    design(w, p)
+    design(w, p, defaults())
 
 
 def to_review(w: WorkDir, p=None) -> None:
     p = p or scripted()
     to_design(w, p)
     ops.confirm(w, "agent-chat")
-    draft(w, p)
+    draft(w, p, roles())
     ops.confirm(w, "agent")
 
 
@@ -85,7 +85,7 @@ def test_page_and_cli_write_identical_files(tmp_path):
         c.put("/api/design", {"units": {"m1": "deep"}})
         c.put("/api/design", {"takeaways": a.design().takeaways})
         c.put("/api/design", {"rules": rules})
-        c.put("/api/design", {"skip": ops.toggled_skip(a.design(), "m6", True, "命名の話")})
+        c.put("/api/design", {"toggle_skip": {"unit": "m6", "on": True, "label": "命名の話"}})
         run_cli("set", b.root, "unit", "m1", "--use", "deep")
         run_cli("set", b.root, "takeaway", "1", b.design().takeaways[0])
         run_cli("rule", b.root, "off", "1")
@@ -215,9 +215,9 @@ def test_restart_rounds(wd):
     assert n == 2 and ops.stage(wd) == "design" and wd.design_file.name == "design.r2.yaml" and not wd.design_file.exists()
     assert wd.draft_base() == "draft.r2.md" and (wd.root / "design.yaml").exists() and wd.interview_file.exists()
     assert ops.wait_for(wd, "design", timeout=0) is None
-    design(wd, scripted())
+    design(wd, scripted(), defaults())
     ops.confirm(wd, "agent-chat")
-    draft(wd, scripted(), wd.draft_base())
+    draft(wd, scripted(), roles(), wd.draft_base())
     assert (wd.root / "draft.r2.md").exists() and (wd.root / "draft.md").exists()
     out = run_cli("restart", wd.root, "--from", "drafting")
     assert "round 3" in out and (wd.root / "design.r3.yaml").read_text(encoding="utf-8") == \
@@ -265,7 +265,7 @@ def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):
 
 
 def test_cli_auto_prints_warning(wd, monkeypatch):
-    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: FakeProvider(
+    monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: FakeProvider(
         lambda p: json.dumps({"answers": []})))
     res = CliRunner().invoke(app, ["auto", str(wd.root), "--stage", "interview"])
     assert res.exit_code == 0 and "推奨しません" in res.output and ops.stage(wd) == "design"

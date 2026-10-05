@@ -10,7 +10,8 @@ from .errors import StepError
 from .generate import DATA_NOTE_JA
 from .glue import material_grams, traceable
 from .interview import unit_lines
-from .llm import extract_json
+from .llm import STR, arr, ask_json, enum, obj, rows
+from .review import load_review
 from .workdir import WorkDir, merge_clusters
 
 if TYPE_CHECKING:
@@ -43,11 +44,7 @@ firsthand の質問には answer を空文字にします。材料から推測�
 
 
 def auto_interview_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["answers"], "properties": {"answers": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "kind", "answer"],
-                                   "properties": {"id": {"type": "string"},
-                                                  "kind": {"type": "string", "enum": ["selection", "firsthand"]},
-                                                  "answer": {"type": "string"}}}}}}
+    return obj(answers=arr(obj(id=STR, kind=enum("selection", "firsthand"), answer=STR)))
 
 
 def auto_interview(wd: WorkDir, provider: Provider) -> dict:
@@ -59,9 +56,9 @@ def auto_interview(wd: WorkDir, provider: Provider) -> dict:
         prompt = AUTO_INTERVIEW_PROMPT_JA.format(
             questions="\n".join(f"[{q.id}] {q.question}" for q in open_qs),
             units=unit_lines(merge_clusters(wd.material_units())))
-        rows = extract_json(provider.complete(prompt, json_schema=auto_interview_schema())).get("answers", [])
+        answers = rows(ask_json(provider, prompt, auto_interview_schema()), "answers")
         by_id = {q.id: q for q in open_qs}
-        for row in rows:
+        for row in answers:
             qid = str(row.get("id"))
             if qid not in by_id or qid in kinds:
                 continue
@@ -93,18 +90,12 @@ AUTO_REVIEW_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def auto_review_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["items"], "properties": {"items": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "decision", "reason"],
-                                   "properties": {"id": {"type": "string"},
-                                                  "decision": {"type": "string", "enum": ["keep", "delete"]},
-                                                  "reason": {"type": "string"}}}}}}
+    return obj(items=arr(obj(id=STR, decision=enum("keep", "delete"), reason=STR)))
 
 
 def auto_review(wd: WorkDir, provider: Provider, rewriter: Callable[[], Provider] | None = None) -> dict:
     """Only undecided meta-discourse and glue items are decided; a sentence that mostly repeats the material is kept;
     nothing is rewritten (a rewrite needs the author's note). Other findings are left for the author."""
-    from .review import load_review
-
     ops.require_stage(wd, "review", action="auto（最終チェック）")
     base = wd.review_draft()
     rev = load_review(wd, base)
@@ -117,7 +108,7 @@ def auto_review(wd: WorkDir, provider: Provider, rewriter: Callable[[], Provider
     ask = [i for i in todo if i.id not in decided]
     if ask:
         prompt = AUTO_REVIEW_PROMPT_JA.format(items="\n".join(f"[{i.id}]（{i.category}）{i.text}" for i in ask))
-        for row in extract_json(provider.complete(prompt, json_schema=auto_review_schema())).get("items", []):
+        for row in rows(ask_json(provider, prompt, auto_review_schema()), "items"):
             iid = str(row.get("id"))
             if iid in {i.id for i in ask} and iid not in decided:
                 decided[iid] = "delete" if row.get("decision") == "delete" else "keep"

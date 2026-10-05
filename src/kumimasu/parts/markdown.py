@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import re
 
 from markdown_it import MarkdownIt
@@ -11,8 +12,7 @@ _FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z
 _ALIGN = {"text-align:left": "left", "text-align:right": "right", "text-align:center": "center"}
 
 
-def _md() -> MarkdownIt:
-    return MarkdownIt("commonmark").enable("table")
+_MD = MarkdownIt("commonmark").enable("table")
 
 
 class _Lines:
@@ -144,10 +144,8 @@ def _sectionize(blocks: list[Part], lines: _Lines, total: int) -> list[Part]:
             (stack[-1].children if stack else root).append(b)
 
     def close(parts: list[Part], end_line: int) -> None:
-        for idx, p in enumerate(parts):
-            if p.kind != "section":
-                continue
-            nxt = next((q for q in parts[idx + 1:] if q.kind == "section"), None)
+        sections = [p for p in parts if p.kind == "section"]
+        for p, nxt in itertools.zip_longest(sections, sections[1:]):
             end = nxt.lines[0] - 1 if nxt and nxt.lines else end_line
             assert p.lines is not None
             p.lines = (p.lines[0], max(p.lines[0], end))
@@ -195,7 +193,7 @@ def parse(text: str) -> PartDoc:
         first_line = n
         prefix.append(Part(kind="front_matter", text=fm.group(0).rstrip("\r\n"), lines=(1, n), span=(0, fm.end())))
         body = "\n" * n + text[fm.end():]
-    tokens = _md().parse(body)
+    tokens = _MD.parse(body)
     blocks = _Builder(tokens, lines).blocks(None)
     blocks = sorted(prefix + blocks + _uncovered(text, lines, blocks, first_line), key=lambda p: p.lines or (0, 0))
     root = Part(kind="doc", lines=(1, total), span=(0, len(text)), children=_sectionize(blocks, lines, total))

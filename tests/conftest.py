@@ -60,3 +60,25 @@ def serving(wd, rewriter=None):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def settings():
+    from pathlib import Path
+
+    from kumimasu.config import load
+
+    return load(None, Path.cwd())
+
+
+def defaults():
+    from kumimasu.cli_common import design_defaults
+
+    return design_defaults(settings())
+
+
+def always_ask() -> list[str]:
+    return settings().get("interview.always_ask") or []
+
+
+def roles() -> dict[str, str]:
+    return settings().roles()

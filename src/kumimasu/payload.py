@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from .generate import DATA_NOTE_JA
-from .llm import extract_json
+from .llm import INT, STR, arr, enum, obj, rows
 from .parts.markdown import parse
 from .parts.model import Part
+from .textutil import norm, sentence_spans
 
 PARA_MAX = 200
 GROUP_CHARS = 120
 CODE_SHOWN = 1500
 
-_SENT = re.compile(r"[^。！？!?\n]*(?:[。！？!?]+[」』）)]*|(?=\n)|$)")
 
 Verdict = Literal["yes", "partial", "no"]
 
@@ -29,16 +28,13 @@ class InfoUnit(BaseModel):
 
     @property
     def chars(self) -> int:
-        return len(re.sub(r"\s", "", self.text))
+        return len(norm(self.text))
 
 
 def _sentence_groups(src: str, a: int, b: int) -> list[tuple[int, int]]:
     out: list[tuple[int, int]] = []
     cur: tuple[int, int] | None = None
-    for m in _SENT.finditer(src, a, b):
-        if not m.group().strip():
-            continue
-        s, e = m.start(), m.end()
+    for s, e in sentence_spans(src, a, b):
         cur = (cur[0], e) if cur else (s, e)
         if len(src[cur[0]:cur[1]].strip()) >= GROUP_CHARS:
             out.append(cur)
@@ -64,7 +60,7 @@ def info_units(markdown: str) -> list[InfoUnit]:
     def prose(p: Part, kind: str, section: str) -> None:
         a, b = p.span or (0, 0)
         body = src[a:b].strip()
-        if len(re.sub(r"\s", "", body)) <= PARA_MAX:
+        if len(norm(body)) <= PARA_MAX:
             add(kind, p.text or body, (a, b), section)
             return
         for s, e in _sentence_groups(src, a, b):
@@ -138,10 +134,7 @@ in: v が yes か partial のとき、その情報が書かれている比べる
 
 
 def coverage_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["units"], "properties": {"units": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "v", "in"],
-                                   "properties": {"id": {"type": "integer"}, "v": {"type": "string", "enum": ["yes", "partial", "no"]},
-                                                  "in": {"type": "array", "items": {"type": "string"}}}}}}}
+    return obj(units=arr(obj(id=INT, v=enum("yes", "partial", "no"), **{"in": arr(STR)})))
 
 
 def coverage_prompt(units: list[InfoUnit], baselines: dict[str, str]) -> str:
@@ -157,10 +150,10 @@ class Coverage(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-def parse_coverage(raw: str, units: list[InfoUnit], labels: list[str]) -> dict[int, Coverage]:
+def parse_coverage(data: dict, units: list[InfoUnit], labels: list[str]) -> dict[int, Coverage]:
     ids = {u.id for u in units}
     out: dict[int, Coverage] = {}
-    for row in extract_json(raw).get("units", []):
+    for row in rows(data, "units"):
         try:
             c = Coverage.model_validate(row)
         except ValueError:

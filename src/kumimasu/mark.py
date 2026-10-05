@@ -10,7 +10,7 @@ from .generate import (
     article_from,
 )
 from .interview import unit_lines
-from .llm import extract_json
+from .llm import STR, arr, ask_json, obj
 from .model import Project, Unit
 from .payload import coverage_prompt, coverage_schema, parse_coverage
 from .workdir import WorkDir, as_info_units
@@ -30,14 +30,14 @@ def baseline_prompt(p: Project) -> str:
 
 def judge_searchable(units: list[Unit], baseline: str, judge: Provider) -> tuple[list[Unit], dict]:
     infos, ids = as_info_units(units)
-    raw = judge.complete(coverage_prompt(infos, {BASELINE: baseline}), json_schema=coverage_schema())
-    cov = parse_coverage(raw, infos, [BASELINE])
+    data = ask_json(judge, coverage_prompt(infos, {BASELINE: baseline}), coverage_schema())
+    cov = parse_coverage(data, infos, [BASELINE])
     out = []
     for info in infos:
         c = cov.get(info.id)
         u = units[info.id - 1]
         out.append(u.model_copy(update={"searchable": c.v if c else None, "found_in": c.in_ if c else []}))
-    return out, {"raw": raw, "ids": ids}
+    return out, {"coverage": data, "ids": ids}
 
 
 CLUSTER_PROMPT_JA = DATA_NOTE_JA + """
@@ -54,19 +54,20 @@ CLUSTER_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def cluster_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["groups"], "properties": {
-        "groups": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}}}
+    return obj(groups=arr(arr(STR)))
 
 
 def cluster_prompt(units: list[Unit]) -> str:
     return CLUSTER_PROMPT_JA.format(units=unit_lines(units, with_mark=False))
 
 
-def parse_clusters(raw: str, units: list[Unit]) -> list[list[str]]:
+def parse_clusters(data: dict, units: list[Unit]) -> list[list[str]]:
     order = {u.id: i for i, u in enumerate(units)}
     seen: set[str] = set()
     out = []
-    for g in extract_json(raw).get("groups", []):
+    for g in data.get("groups") if isinstance(data.get("groups"), list) else []:
+        if not isinstance(g, list):
+            continue
         ids = sorted({x for x in g if x in order and x not in seen}, key=order.__getitem__)
         if len(ids) >= 2:
             seen.update(ids)
@@ -90,10 +91,10 @@ def mark(wd: WorkDir, writer: Provider, judge: Provider, reuse_baseline: bool = 
         baseline = article_from(writer.complete(prompt))
         wd.write(f"baseline/{BASELINE}.md", baseline)
     units, log = judge_searchable(wd.material_units(), baseline, judge)
-    raw = judge.complete(cluster_prompt(units), json_schema=cluster_schema())
-    groups = parse_clusters(raw, units)
+    data = ask_json(judge, cluster_prompt(units), cluster_schema())
+    groups = parse_clusters(data, units)
     units = apply_clusters(units, groups)
-    wd.write_json("baseline/mark.json", log | {"clusters": groups, "clusters_raw": raw})
+    wd.write_json("baseline/mark.json", log | {"clusters": groups, "clusters_answer": data})
     wd.save_units(units)
     return units
 

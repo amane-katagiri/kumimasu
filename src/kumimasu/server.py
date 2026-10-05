@@ -12,8 +12,20 @@ from urllib.parse import quote, urlparse
 from pydantic import ValidationError
 
 from . import ops
+from .check import check_stem
 from .design import sync_design
+from .draft import read_used
 from .errors import LLMError, StepError
+from .render import render
+from .review import (
+    ReviewContext,
+    base_drafts,
+    download_name,
+    final_changes,
+    final_name,
+    is_final,
+    load_review,
+)
 from .workdir import DRAFT_NAME, WorkDir
 
 if TYPE_CHECKING:
@@ -30,14 +42,10 @@ class WriteApp:
         self.poll_seconds = poll_seconds
 
     def drafts(self) -> dict:
-        from .review import base_drafts, final_name
-
         return {"drafts": [{"name": b, "final": final_name(b) if self.wd.is_plain_file(final_name(b)) else None}
                            for b in base_drafts(self.wd)]}
 
     def draft_name(self, name: str) -> str:
-        from .review import is_final
-
         if not DRAFT_NAME.match(name) or name.endswith(".prompt.md") or is_final(name) or not self.wd.is_plain_file(name):
             raise KeyError(name)
         return name
@@ -48,9 +56,6 @@ class WriteApp:
         return message
 
     def final(self, name: str) -> dict:
-        from .render import render
-        from .review import final_changes, final_name, load_review
-
         name = self.draft_name(name)
         out = final_name(name)
         if not self.wd.is_plain_file(out):
@@ -60,8 +65,6 @@ class WriteApp:
         return {"draft": name, "final": out, "markdown": text, "html": render(text)[0], "changes": changes}
 
     def download(self, name: str) -> tuple[str, bytes]:
-        from .review import download_name, final_name
-
         name = self.draft_name(name)
         out = final_name(name)
         if not self.wd.is_plain_file(out):
@@ -69,21 +72,16 @@ class WriteApp:
         return download_name(self.wd, name), self.wd.read(out).encode()
 
     def review(self, name: str) -> dict:
-        from .render import render
-        from .review import load_review, needs_apply
-
         name = self.draft_name(name)
-        html, _ = render(self.wd.read(name))
-        rev = load_review(self.wd, name)
-        from .draft import read_used
+        ctx = ReviewContext.load(self.wd, name)
+        rev = ctx.review
+        html, _ = render(ctx.src)
 
-        return {"draft": name, "html": html, "items": [i.model_dump() for i in rev.items], "dirty": needs_apply(self.wd, name),
+        return {"draft": name, "html": html, "items": [i.model_dump() for i in rev.items], "dirty": ctx.needs_apply(),
                 "used": read_used(self.wd, name),
                 "checked": bool(rev.items) or any((self.wd.root / f).exists() for f in self._check_files(name))}
 
     def _check_files(self, name: str) -> list[str]:
-        from .check import check_stem
-
         return [f"{check_stem(name, s)}.json" for s in (False, True)]
 
     def save_review(self, name: str, body: dict) -> dict:
@@ -92,12 +90,11 @@ class WriteApp:
         return self.review(name)
 
     def apply(self, name: str) -> dict:
-        from .review import needs_rewrite_call
-
         name = self.draft_name(name)
         with ops.LOCK:
-            needs = needs_rewrite_call(self.wd, name)
-            res = ops.apply(self.wd, name, self.rewriter() if needs and self.rewriter else None, SOURCE)
+            ctx = ReviewContext.load(self.wd, name)
+            res = ops.apply(self.wd, name, self.rewriter() if ctx.needs_rewrite_call() and self.rewriter else None, SOURCE,
+                            ctx=ctx)
         return res.model_dump()
 
     def confirm(self, body: dict) -> dict:

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
-from .metadiscourse import code_free_lines, sentences
+from .textutil import code_free_lines, sentences
 
 _MD_LINK = re.compile(r"\]\((https?://(?:[^\s()]|\([^\s()]*\))+)(?:\s+\"[^\"]*\")?\)")
 _BARE = re.compile(r"(?<![(\[`])https?://[^\s<>)\]`」』、。]+")

@@ -6,89 +6,47 @@ from typing import Annotated
 
 import typer
 
-from .errors import StepError
-from .workdir import WorkDir
-
-app = typer.Typer(no_args_is_help=True, help="Write an article from the author's unselected material: "
-                  "init -> mark -> interview -> design -> draft -> check -> final check.")
-
-DirArg = Annotated[Path, typer.Argument(file_okay=False, help="Work directory")]
-WriterOpt = Annotated[str | None, typer.Option("--writer", help="Provider for the one-shot writing call, no tools "
-                                               "(default: config providers.writer)")]
-ResearcherOpt = Annotated[str | None, typer.Option("--researcher", help="Provider for the web research before writing "
-                                                   "(default: config providers.researcher)")]
-JudgeOpt = Annotated[str | None, typer.Option("--judge", help="Provider for coverage and mapping judgements "
-                                              "(default: config providers.judge)")]
-MetaOpt = Annotated[str | None, typer.Option("--meta-detector", help="Provider for meta-discourse/glue detection, or "
-                                             "'rules' (default: config providers.detector)")]
-ProviderOpt = Annotated[str | None, typer.Option("--provider", help="Provider (default: from the config)")]
-VerifyOpt = Annotated[bool, typer.Option("--verify-links", help="Open links that are not in the material (network)")]
-WEB_TOOLS = ("WebSearch", "WebFetch")
-STATE = {"trust_project": False}
-
-
-@app.callback()
-def options(trust_project: Annotated[bool, typer.Option(
-        "--trust-project", envvar="KUMIMASU_TRUST_PROJECT",
-        help="Use providers, cache_dir, workdir_root and outside rules files from ./kumimasu.yaml and the work "
-             "directory's project.yaml")] = False) -> None:
-    STATE["trust_project"] = trust_project
-
-
-def _notice(text: str) -> None:
-    typer.echo(text, err=True)
-
-
-def _wd(path: Path) -> WorkDir:
-    wd = WorkDir(path)
-    if not wd.project_file.exists():
-        raise typer.BadParameter(f"{path} は作業ディレクトリではありません（`kumimasu init` で作ります）")
-    return wd
-
-
-def _provider(spec: str, web: bool = False, cache_dir: str | None = None):
-    from .llm import get_provider
-
-    return get_provider(spec, cache_dir=cache_dir, allowed_tools=WEB_TOOLS if web and spec.startswith("claude-cli") else ())
-
-
-def _cfg(path: Path | None = None, **cli):
-    from .config import ConfigError, load
-
-    try:
-        cfg = load(path, Path.cwd(), cli, trust=STATE["trust_project"])
-    except ConfigError as e:
-        _fail(e)
-    for w in cfg.warnings():
-        _notice(f"注意: {w}")
-    return cfg
-
-
-def _llm(cfg, role: str, override: str | None = None, web: bool = False):
-    return _provider(cfg.provider(role, override), web=web, cache_dir=cfg.cache_dir)
-
-
-def _detector(cfg, override: str | None):
-    spec = cfg.provider("detector", override)
-    return None if spec == "rules" else _provider(spec, cache_dir=cfg.cache_dir)
-
-
-def _fail(e: Exception) -> None:
-    typer.echo(f"error: {e}", err=True)
-    raise typer.Exit(1)
-
-
-def _guard(wd: WorkDir, *stages: str, action: str) -> None:
-    from .ops import require_stage
-
-    try:
-        require_stage(wd, *stages, action=action)
-    except StepError as e:
-        _fail(e)
-
-
-SourceOpt = Annotated[str, typer.Option("--source", help="Who decided: agent-chat (the user, through the agent), "
-                                        "human-ui, auto")]
+from . import cli_common as cc
+from . import (
+    cli_flow,  # noqa: F401  # registers the checkpoint commands on app
+    ops,
+)
+from .check import check as run_check
+from .check import report_text
+from .cli_common import (
+    DirArg,
+    DraftOpt,
+    JudgeOpt,
+    MetaOpt,
+    ProviderOpt,
+    ResearcherOpt,
+    RewriterOpt,
+    SourceOpt,
+    VerifyOpt,
+    WriterOpt,
+    app,
+    errors,
+    notice,
+)
+from .config import Config
+from .design import design as run_design
+from .design import noise_workdir, review_conflicts, sync_design
+from .draft import draft as run_draft
+from .factcheck import check_urls
+from .files import private_dir
+from .interview import interview as run_interview
+from .mark import mark as run_mark
+from .mark import mark_counts
+from .model import KINDS, USES, Design, Project
+from .polish import POLISH_RULES
+from .polish import polish as run_polish
+from .research import Research, load_research, research_name
+from .research import research as run_research
+from .review import ReviewContext, export_final, require_base
+from .revise import revise as run_revise
+from .server import WriteApp
+from .server import serve as run_server
+from .workdir import WorkDir, check_draft_name, init_workdir
 
 
 @app.command()
@@ -96,42 +54,32 @@ def init(path: DirArg,
          topic: Annotated[str, typer.Option("--topic")],
          audience: Annotated[str, typer.Option("--audience")],
          material: Annotated[list[Path] | None, typer.Option("--material", "-m", exists=True, dir_okay=False,
-                                                      help="Notes, logs, code or link lists (repeatable)")] = None,
+                                                             help="Notes, logs, code or link lists (repeatable)")] = None,
          kind: Annotated[str, typer.Option("--kind", help="実用 | 読み物 | 調査")] = "実用",
          length: Annotated[int, typer.Option("--length", min=300)] = 4000) -> None:
     """Copy the material into DIR and split it into material units (units.yaml)."""
-    from .files import private_dir
-    from .model import KINDS, Project
-    from .workdir import init_workdir
-
     if kind not in KINDS:
-        raise typer.BadParameter(f"--kind must be one of {' | '.join(KINDS)}")
-    try:
-        root = Path(_cfg().workdir_root)
+        raise typer.BadParameter(f"--kind は {' | '.join(KINDS)} のどれかにしてください")
+    files = material or []
+    with errors():
+        root = Path(cc.config().workdir_root)
         if path.resolve().is_relative_to(root.resolve()):
             private_dir(root)
-        _, units = init_workdir(path, Project(topic=topic, audience=audience, kind=kind, length=length), material or [])
-    except StepError as e:
-        _fail(e)
-    typer.echo(f"wrote {path / 'project.yaml'} and {path / 'units.yaml'} ({len(units)} units from {len(material or [])} files)")
+        _, units = init_workdir(path, Project(topic=topic, audience=audience, kind=kind, length=length), files)
+    typer.echo(f"wrote {path / 'project.yaml'} and {path / 'units.yaml'} ({len(units)} units from {len(files)} files)")
 
 
 @app.command()
 def mark(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
          new_baseline: Annotated[bool, typer.Option("--new-baseline", help="Write baseline/W.md again")] = False) -> None:
     """Mark each unit as searchable or first-hand against one web-enabled generic article (a marker, not a goal)."""
-    from .mark import mark as run
-    from .mark import mark_counts
-
-    wd = _wd(path)
-    _guard(wd, "interview", action="目印付け")
-    try:
-        cfg = _cfg(path)
-        if new_baseline or not (wd.root / "baseline" / "W.md").exists():
-            _notice("ウェブ調査: providers.baseline が WebSearch・WebFetch を使います（送るのは題と読者だけ）")
-        units = run(wd, _llm(cfg, "baseline", writer, web=True), _llm(cfg, "judge", judge), reuse_baseline=not new_baseline)
-    except StepError as e:
-        _fail(e)
+    wd = cc.workdir(path, "interview", action="目印付け")
+    cfg = cc.config(path)
+    if new_baseline or not (wd.root / "baseline" / "W.md").exists():
+        notice("ウェブ調査: providers.baseline が WebSearch・WebFetch を使います（送るのは題と読者だけ）")
+    with errors():
+        units = run_mark(wd, cc.llm(cfg, "baseline", writer, web=True), cc.llm(cfg, "judge", judge),
+                         reuse_baseline=not new_baseline)
     c = mark_counts(units)
     typer.echo(f"searchable yes {c['yes']}, partial {c['partial']}, no {c['no']}, unjudged {c['unjudged']}  "
                f"(baseline: {path / 'baseline' / 'W.md'})")
@@ -141,90 +89,16 @@ def mark(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
 def interview(path: DirArg, provider: ProviderOpt = None,
               overwrite: Annotated[bool, typer.Option("--overwrite", help="Replace questions that already have answers")] = False) -> None:
     """Write 4-6 short questions to DIR/interview.yaml; answer them there or in `serve`."""
-    from .interview import interview as run
-
-    wd = _wd(path)
-    _guard(wd, "interview", action="質問づくり")
-    try:
-        iv = run(wd, _llm(_cfg(path), "interviewer", provider), overwrite)
-    except StepError as e:
-        _fail(e)
+    wd = cc.workdir(path, "interview", action="質問づくり")
+    cfg = cc.config(path)
+    with errors():
+        iv = run_interview(wd, cc.llm(cfg, "interviewer", provider), cfg.get("interview.always_ask") or [], overwrite)
     for q in iv.questions:
         typer.echo(f"{q.id}. {q.question}")
     typer.echo(f"\nanswer in {wd.interview_file} or with `kumimasu serve {path}`")
 
 
-@app.command()
-def design(path: DirArg, provider: ProviderOpt = None,
-           overwrite: Annotated[bool, typer.Option("--overwrite")] = False) -> None:
-    """Propose DIR/design.yaml: purpose, takeaways, deep/mention/drop per unit, order hints, forms and rules."""
-    from .design import design as run
-
-    wd = _wd(path)
-    _guard(wd, "design", action="設計の提案")
-    try:
-        d = run(wd, _llm(_cfg(path), "designer", provider), overwrite)
-    except StepError as e:
-        _fail(e)
-    n = {u: sum(x.use == u for x in d.units) for u in ("deep", "mention", "drop")}
-    typer.echo(f"wrote {wd.design_file}: deep {n['deep']}, mention {n['mention']}, drop {n['drop']}")
-    for t in d.takeaways:
-        typer.echo(f"  - {t}")
-    _echo_design_notes(d)
-
-
-@app.command()
-def serve(path: DirArg, port: Annotated[int | None, typer.Option("--port", help="Default: config serve.port")] = None,
-          rewriter: Annotated[str | None, typer.Option("--rewriter", help="Provider for 書き直す in the final check "
-                                                       "(default: config providers.rewriter)")] = None) -> None:
-    """Local page (127.0.0.1): material marks, interview answers, the design, and the final check of a draft.
-    Edits autosave to the YAML files."""
-    from .server import WriteApp
-    from .server import serve as run
-
-    wd = _wd(path)
-    cfg = _cfg(path)
-    run(WriteApp(wd, lambda: _llm(cfg, "rewriter", rewriter), poll_seconds=cfg.get("serve.poll_seconds")),
-        cfg.get("serve.port", port))
-
-
-@app.command()
-def apply(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft")] = None,
-          provider: Annotated[str | None, typer.Option("--provider", help="Provider for 書き直す (default: config "
-                                                       "providers.rewriter)")] = None,
-          regenerate: Annotated[str, typer.Option("--regenerate", help="Comma-separated item ids whose stored rewrite "
-                                                  "is dropped and made again")] = "",
-          source: SourceOpt = "agent-chat") -> None:
-    """Apply the final-check decisions (review.<draft>.yaml): delete and rewrite only the decided spans -> <draft>.final.md.
-    The source must be a base draft, not a *.final*.md output."""
-    from . import ops
-    from .review import load_review, needs_rewrite_call, require_base
-
-    wd = _wd(path)
-    draft_name = draft_name or wd.review_draft()
-    try:
-        require_base(draft_name)
-    except ValueError as e:
-        _fail(e)
-    try:
-        regen = tuple(x.strip() for x in regenerate.split(",") if x.strip())
-        unknown = set(regen) - {i.id for i in load_review(wd, draft_name).items}
-        if unknown:
-            raise ValueError(f"unknown item ids: {', '.join(sorted(unknown))}")
-        res = ops.apply(wd, draft_name, _llm(_cfg(path), "rewriter", provider)
-                        if needs_rewrite_call(wd, draft_name, regen) else None, source, regen)
-    except (StepError, ValueError) as e:
-        _fail(e)
-    typer.echo(f"wrote {wd.root / res.out}: deleted {res.deleted}, rewritten {res.rewritten} (reused {res.reused}), "
-               f"skipped {len(res.skipped)}, stale {len(res.stale)}, calls {res.calls}")
-    for iid in res.stale:
-        typer.echo(f"stale: {iid} (the draft changed since this item was made; regenerate or re-decide it)")
-    for tag, line in res.diff:
-        if tag != " ":
-            typer.echo(f"{tag} {line}")
-
-
-def _echo_design_notes(d) -> None:
+def _echo_design_notes(d: Design) -> None:
     for sk in d.skip:
         typer.echo(f"skip: {sk.label}" + (f" ({', '.join(sk.units)})" if sk.units else ""))
     for a in d.aside:
@@ -233,19 +107,34 @@ def _echo_design_notes(d) -> None:
         typer.echo(f"warning: {c.message()}")
     if d.avoid:
         typer.echo("avoid: " + " / ".join(d.avoid))
+    for t in d.research:
+        typer.echo(f"research: {t}")
+
+
+@app.command()
+def design(path: DirArg, provider: ProviderOpt = None,
+           overwrite: Annotated[bool, typer.Option("--overwrite")] = False) -> None:
+    """Propose DIR/design.yaml: purpose, takeaways, deep/mention/drop per unit, order hints, forms, the web research
+    list and rules."""
+    wd = cc.workdir(path, "design", action="設計の提案")
+    cfg = cc.config(path)
+    with errors():
+        d = run_design(wd, cc.llm(cfg, "designer", provider), cc.design_defaults(cfg), overwrite)
+    n = {u: sum(x.use == u for x in d.units) for u in USES}
+    typer.echo(f"wrote {wd.design_file}: deep {n['deep']}, mention {n['mention']}, drop {n['drop']}")
+    for t in d.takeaways:
+        typer.echo(f"  - {t}")
+    _echo_design_notes(d)
 
 
 @app.command()
 def noise(path: DirArg, provider: ProviderOpt = None) -> None:
     """Propose 1-3 skipped prerequisites and 1-2 asides for the current design (other uses are kept), then review again."""
-    from .design import noise_workdir
-
-    wd = _wd(path)
-    _guard(wd, "design", action="前提と脱線の提案")
-    try:
-        d = noise_workdir(wd, _llm(_cfg(path), "designer", provider))
-    except StepError as e:
-        _fail(e)
+    wd = cc.workdir(path, "design", action="前提と脱線の提案")
+    cfg = cc.config(path)
+    with errors():
+        d = noise_workdir(wd, cc.llm(cfg, "designer", provider), cfg.get("defaults.noise.skip_max"),
+                          cfg.get("defaults.noise.aside_max"))
     _echo_design_notes(d)
 
 
@@ -253,45 +142,44 @@ def noise(path: DirArg, provider: ProviderOpt = None) -> None:
 def review(path: DirArg, provider: ProviderOpt = None,
            keep_avoid: Annotated[bool, typer.Option("--keep-avoid", help="Keep the avoid list as edited")] = False) -> None:
     """Recompute, for the current design, which drop units the kept units would bring in anyway, and the avoid topics."""
-    from .design import review_workdir
-
-    wd = _wd(path)
-    _guard(wd, "design", action="設計の見直し")
-    try:
-        d = review_workdir(wd, _llm(_cfg(path), "designer", provider), keep_avoid)
-    except StepError as e:
-        _fail(e)
+    wd = cc.workdir(path, "design", action="設計の見直し")
+    cfg = cc.config(path)
+    with errors():
+        d = review_conflicts(wd, cc.llm(cfg, "designer", provider), keep_avoid)
     _echo_design_notes(d)
+
+
+@app.command()
+def serve(path: DirArg, port: Annotated[int | None, typer.Option("--port", help="Default: config serve.port")] = None,
+          rewriter: RewriterOpt = None) -> None:
+    """Local page (127.0.0.1): material marks, interview answers, the design, and the final check of a draft.
+    Edits autosave to the YAML files."""
+    wd = cc.workdir(path)
+    cfg = cc.config(path)
+    run_server(WriteApp(wd, lambda: cc.llm(cfg, "rewriter", rewriter), cfg.get("serve.poll_seconds")),
+               cfg.resolve("serve.port", port))
+
+
+def _research(wd: WorkDir, cfg: Config, researcher: str | None, refresh: bool) -> Research:
+    d = sync_design(wd.design(), wd.units())
+    old = load_research(wd)
+    if old is not None and old.topics == d.research and not refresh:
+        return old
+    if d.research:
+        notice("ウェブ調査: providers.researcher が WebSearch・WebFetch を使います"
+               "（送るのは題・読者・ねらい・持ち帰り・調べることだけで、材料と回答は送りません）")
+    return run_research(wd, cc.llm(cfg, "researcher", researcher, web=True), d)
 
 
 @app.command()
 def research(path: DirArg, researcher: ResearcherOpt = None) -> None:
     """Web research for the design's research list -> DIR/research.json. Only the topic, audience, purpose, takeaways
     and that list are sent; the material and the answers are not."""
-    from .research import research_name
-
-    wd = _wd(path)
-    _guard(wd, "drafting", action="ウェブ調査")
-    try:
-        res = _research(wd, _cfg(path), researcher, refresh=True)
-    except StepError as e:
-        _fail(e)
+    wd = cc.workdir(path, "drafting", action="ウェブ調査")
+    cfg = cc.config(path)
+    with errors():
+        res = _research(wd, cfg, researcher, refresh=True)
     typer.echo(f"wrote {wd.root / research_name(wd)}: {len(res.findings)} findings")
-
-
-def _research(wd: WorkDir, cfg, researcher: str | None, refresh: bool):
-    from .design import sync_design
-    from .research import load_research
-    from .research import research as run
-
-    d = sync_design(wd.design(), wd.units())
-    old = load_research(wd)
-    if old is not None and old.topics == d.research and not refresh:
-        return old
-    if d.research:
-        _notice("ウェブ調査: providers.researcher が WebSearch・WebFetch を使います"
-                "（送るのは題・読者・ねらい・持ち帰り・調べることだけで、材料と回答は送りません）")
-    return run(wd, _llm(cfg, "researcher", researcher, web=True), d)
 
 
 @app.command()
@@ -302,56 +190,38 @@ def draft(path: DirArg, writer: WriterOpt = None, researcher: ResearcherOpt = No
           drop_list: Annotated[str | None, typer.Option("--drop-list", help="topics | full | none (default: design.yaml)")] = None) -> None:
     """Web research for the design's research list (only when it changed), then one writing call without tools
     with the design, the kept material and the research findings -> DIR/draft.md."""
-    from .draft import draft as run
-    from .workdir import check_draft_name
-
     if drop_list not in (None, "topics", "full", "none"):
-        raise typer.BadParameter("--drop-list must be topics, full or none")
-    wd = _wd(path)
-    _guard(wd, "drafting", action="下書き")
-    out = out or wd.draft_base()
-    try:
-        check_draft_name(out)
-        cfg = _cfg(path)
+        raise typer.BadParameter("--drop-list は topics, full, none のどれかにしてください")
+    wd = cc.workdir(path, "drafting", action="下書き")
+    cfg = cc.config(path)
+    with errors():
+        out = check_draft_name(out or wd.draft_base())
         found = _research(wd, cfg, researcher, new_research)
-        text = run(wd, _llm(cfg, "writer", writer), out, drop_list, found)
-    except (StepError, ValueError) as e:
-        _fail(e)
+        text = run_draft(wd, cc.llm(cfg, "writer", writer), cfg.roles(), out, drop_list, found)
     typer.echo(f"wrote {wd.root / out} ({len(text)} chars)")
 
 
 def _fetch(verify: bool):
     if not verify:
         return None
-    from .factcheck import check_urls
-
-    _notice("リンクの確認: 材料に無いリンクを開きます（ネットワークを使います。非公開のアドレスには繋ぎません）")
+    notice("リンクの確認: 材料に無いリンクを開きます（ネットワークを使います。非公開のアドレスには繋ぎません）")
     return check_urls
 
 
 @app.command()
-def check(path: DirArg, judge: JudgeOpt = None, meta_detector: MetaOpt = None,
-          draft_name: Annotated[str | None, typer.Option("--draft", help="Draft file inside DIR")] = None,
+def check(path: DirArg, judge: JudgeOpt = None, meta_detector: MetaOpt = None, draft_name: DraftOpt = None,
           verify_links: VerifyOpt = False,
           surface_only: Annotated[bool, typer.Option("--surface-only", help="Only meta-discourse, glue and lint "
                                                      "(-> check*.surface.json)")] = False,
           surface_runs: Annotated[int | None, typer.Option("--surface-runs", min=1, help="Majority-vote runs for meta/glue "
                                                            "(default: config surface.runs)")] = None) -> None:
     """Check the draft against the design (the design's metamorphic relations) -> DIR/check.json and check.txt."""
-    from .check import check as run
-    from .check import report_text
-    from .workdir import check_draft_name
-
-    wd = _wd(path)
-    _guard(wd, "drafting", action="検査")
-    draft_name = draft_name or wd.draft_base()
-    try:
-        check_draft_name(draft_name)
-        cfg = _cfg(path)
-        rep = run(wd, _llm(cfg, "judge", judge), _detector(cfg, meta_detector), draft_name, _fetch(verify_links),
-                  surface_only, cfg.get("surface.runs", surface_runs), cfg.get("surface.min_votes"))
-    except (StepError, ValueError) as e:
-        _fail(e)
+    wd = cc.workdir(path, "drafting", action="検査")
+    cfg = cc.config(path)
+    with errors():
+        name = check_draft_name(draft_name or wd.draft_base())
+        rep = run_check(wd, cc.llm(cfg, "judge", judge), cc.detector(cfg, meta_detector), name, _fetch(verify_links),
+                        surface_only, cfg.resolve("surface.runs", surface_runs), cfg.get("surface.min_votes"))
     typer.echo(report_text(rep), nl=False)
 
 
@@ -359,19 +229,13 @@ def check(path: DirArg, judge: JudgeOpt = None, meta_detector: MetaOpt = None,
 def revise(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
            meta_detector: MetaOpt = None, verify_links: VerifyOpt = False) -> None:
     """If structural checks fail, one rewrite with instructions from those checks only -> DIR/draft.v2.md, then check again."""
-    from .check import report_text
-    from .revise import revise as run
-
-    wd = _wd(path)
-    _guard(wd, "drafting", action="書き直し")
+    wd = cc.workdir(path, "drafting", action="書き直し")
+    cfg = cc.config(path)
     src = wd.draft_base()
     dst = src.removesuffix(".md") + ".v2.md"
-    try:
-        cfg = _cfg(path)
-        rep, todo = run(wd, _llm(cfg, "writer", writer), _llm(cfg, "judge", judge),
-                        _detector(cfg, meta_detector), _fetch(verify_links), src, dst)
-    except StepError as e:
-        _fail(e)
+    with errors():
+        rep, todo = run_revise(wd, cc.llm(cfg, "writer", writer), cc.llm(cfg, "judge", judge),
+                               cc.detector(cfg, meta_detector), cfg.roles(), _fetch(verify_links), src, dst)
     if rep is None:
         typer.echo("no failed structural checks; nothing to revise (surface findings go to `polish`)")
         return
@@ -380,7 +244,7 @@ def revise(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
 
 
 @app.command()
-def polish(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft")] = None,
+def polish(path: DirArg, draft_name: DraftOpt = None,
            provider: Annotated[str | None, typer.Option("--provider", help="Default: config providers.detector")] = None,
            yes: Annotated[bool, typer.Option("--yes", help="Apply: delete or rewrite only the flagged sentences")] = False,
            rules: Annotated[str, typer.Option("--rules", help="Comma-separated: meta, glue, dash")] = "meta,glue,dash",
@@ -391,28 +255,20 @@ def polish(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft
            out: Annotated[str | None, typer.Option("--out", help="File name inside DIR (default: <draft>.polished.md)")] = None) -> None:
     """Surface pass: majority-vote detection of meta-discourse, glue and dashes; with --yes, rewrite only those sentences
     and re-detect around the edits until nothing stable is left."""
-    from .polish import POLISH_RULES
-    from .polish import polish as run
-    from .workdir import check_draft_name
-
     chosen = tuple(r.strip() for r in rules.split(",") if r.strip())
     if not chosen or any(r not in POLISH_RULES for r in chosen):
-        raise typer.BadParameter(f"--rules must be a comma-separated subset of {', '.join(POLISH_RULES)}")
-    cfg = _cfg(path)
-    runs = cfg.get("surface.runs", runs)
-    min_votes = cfg.get("surface.min_votes", min_votes)
-    max_rounds = cfg.get("surface.max_rounds", max_rounds)
+        raise typer.BadParameter(f"--rules は {', '.join(POLISH_RULES)} からカンマ区切りで選んでください")
+    cfg = cc.config(path)
+    runs = cfg.resolve("surface.runs", runs)
+    min_votes = cfg.resolve("surface.min_votes", min_votes)
     if min_votes > runs:
-        raise typer.BadParameter("--min-votes must not exceed --runs")
-    wd = _wd(path)
-    _guard(wd, "drafting", action="表面の仕上げ")
-    draft_name = draft_name or wd.draft_base()
-    try:
-        check_draft_name(draft_name)
-        out = check_draft_name(out or draft_name.removesuffix(".md") + ".polished.md")
-        res = run(wd, _llm(cfg, "detector", provider), draft_name, chosen, yes, runs, min_votes, max_rounds, out)
-    except (StepError, ValueError) as e:
-        _fail(e)
+        raise typer.BadParameter("--min-votes は --runs 以下にしてください")
+    wd = cc.workdir(path, "drafting", action="表面の仕上げ")
+    with errors():
+        name = check_draft_name(draft_name or wd.draft_base())
+        out = check_draft_name(out or name.removesuffix(".md") + ".polished.md")
+        res = run_polish(wd, cc.llm(cfg, "detector", provider), name, chosen, yes, runs, min_votes,
+                         cfg.resolve("surface.max_rounds", max_rounds), out)
     for rd in res.rounds:
         typer.echo(f"round {rd.round}: scope {rd.scope_chars} chars, {rd.runs} runs, {rd.hits} hits, {rd.edits} edits, "
                    f"{rd.calls} calls")
@@ -427,20 +283,42 @@ def polish(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft
 
 
 @app.command()
-def export(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft")] = None,
+def apply(path: DirArg, draft_name: DraftOpt = None,
+          provider: Annotated[str | None, typer.Option("--provider", help="Provider for 書き直す (default: config "
+                                                       "providers.rewriter)")] = None,
+          regenerate: Annotated[str, typer.Option("--regenerate", help="Comma-separated item ids whose stored rewrite "
+                                                  "is dropped and made again")] = "",
+          source: SourceOpt = "agent-chat") -> None:
+    """Apply the final-check decisions (review.<draft>.yaml): delete and rewrite only the decided spans -> <draft>.final.md.
+    The source must be a base draft, not a *.final*.md output."""
+    wd = cc.workdir(path)
+    with errors():
+        name = draft_name or wd.review_draft()
+        require_base(name)
+        regen = tuple(x.strip() for x in regenerate.split(",") if x.strip())
+        ctx = ReviewContext.load(wd, name)
+        unknown = set(regen) - {i.id for i in ctx.review.items}
+        if unknown:
+            raise ValueError(f"知らない項目です: {', '.join(sorted(unknown))}")
+        res = ops.apply(wd, name, cc.llm(cc.config(path), "rewriter", provider)
+                        if ctx.needs_rewrite_call(regen) else None, cc.source(source), regen)
+    typer.echo(f"wrote {wd.root / res.out}: deleted {res.deleted}, rewritten {res.rewritten} (reused {res.reused}), "
+               f"skipped {len(res.skipped)}, stale {len(res.stale)}, calls {res.calls}")
+    for iid in res.stale:
+        typer.echo(f"stale: {iid} (the draft changed since this item was made; regenerate or re-decide it)")
+    for tag, line in res.diff:
+        if tag != " ":
+            typer.echo(f"{tag} {line}")
+
+
+@app.command()
+def export(path: DirArg, draft_name: DraftOpt = None,
            to: Annotated[Path, typer.Option("--to", file_okay=False, help="Directory to copy into")] = Path(".")) -> None:
     """Copy <draft>.final.md to TO/<workdir>-<draft stem>-<YYYYmmdd-HHMM>.md (never overwrites)."""
-    from .review import export_final
-
-    wd = _wd(path)
-    try:
+    wd = cc.workdir(path)
+    with errors():
         dest = export_final(wd, draft_name or wd.review_draft(), to)
-    except ValueError as e:
-        _fail(e)
     typer.echo(f"wrote {dest}")
-
-
-from . import cli_flow  # noqa: F401  (registers the checkpoint commands on `app`)
 
 
 def main() -> None:

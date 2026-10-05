@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-import yaml
 from pydantic import BaseModel
 
 from .design import sync_design
 from .factcheck import UrlStatus, extract_urls, firsthand_hits
 from .generate import DATA_NOTE_JA
 from .interview import unit_lines
-from .llm import extract_json
-from .metadiscourse import code_free_lines, sentences, split_units
+from .keep import KeepStore, text_hash
+from .llm import INT, STR, arr, ask_json, enum, obj, rows
+from .metadiscourse import split_sentences
 from .model import Design, Unit
 from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
@@ -33,6 +32,15 @@ from .surface import (
     SurfaceReport,
     detect_surface,
     rule_hints,
+)
+from .textutil import (
+    blocks,
+    code_free_lines,
+    code_ranges,
+    excerpt,
+    locate,
+    overlaps,
+    sentences,
 )
 from .workdir import WorkDir, as_info_units
 
@@ -101,22 +109,10 @@ MAP_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def map_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["units", "takeaways"], "properties": {
-        "units": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                             "required": ["id", "from", "firsthand"],
-                                             "properties": {"id": {"type": "integer"},
-                                                            "from": {"type": "array", "items": {"type": "string"}},
-                                                            "firsthand": {"type": "string", "enum": ["yes", "no"]}}}},
-        "takeaways": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                                 "required": ["index", "present", "evidence"],
-                                                 "properties": {"index": {"type": "integer"},
-                                                                "present": {"type": "string", "enum": ["yes", "no"]},
-                                                                "evidence": {"type": "array", "items": {"type": "integer"}}}}},
-        "skips": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                             "required": ["index", "explained", "evidence"],
-                                             "properties": {"index": {"type": "integer"},
-                                                            "explained": {"type": "string", "enum": ["yes", "no"]},
-                                                            "evidence": {"type": "array", "items": {"type": "integer"}}}}}}}
+    verdict = enum("yes", "no")
+    return obj(units=arr(obj(id=INT, **{"from": arr(STR)}, firsthand=verdict)),
+               takeaways=arr(obj(index=INT, present=verdict, evidence=arr(INT))),
+               skips=arr(obj(index=INT, explained=verdict, evidence=arr(INT))))
 
 
 def map_prompt(draft_units: list[InfoUnit], units: list[Unit], takeaways: list[str], skips: list[str] = ()) -> str:
@@ -132,22 +128,21 @@ class DraftMap(BaseModel):
     skips: dict[int, tuple[bool, list[int]]] = {}
 
 
-def parse_map(raw: str, draft_units: list[InfoUnit], units: list[Unit], n_takeaways: int, n_skips: int = 0) -> DraftMap:
-    data = extract_json(raw)
+def parse_map(data: dict, draft_units: list[InfoUnit], units: list[Unit], n_takeaways: int, n_skips: int = 0) -> DraftMap:
     ids = {u.id for u in draft_units}
     mids = {u.id for u in units}
     m = DraftMap()
-    for row in data.get("units", []):
+    for row in rows(data, "units"):
         i = row.get("id")
         if i in ids and i not in m.sources:
             m.sources[i] = [x for x in row.get("from", []) if x in mids]
             if row.get("firsthand") == "yes":
                 m.firsthand.add(i)
-    for row in data.get("takeaways", []):
+    for row in rows(data, "takeaways"):
         k = row.get("index")
         if isinstance(k, int) and 1 <= k <= n_takeaways and k not in m.takeaways:
             m.takeaways[k] = (row.get("present") == "yes", [e for e in row.get("evidence", []) if e in ids])
-    for row in data.get("skips", []):
+    for row in rows(data, "skips"):
         k = row.get("index")
         if isinstance(k, int) and 1 <= k <= n_skips and k not in m.skips:
             m.skips[k] = (row.get("explained") == "yes", [e for e in row.get("evidence", []) if e in ids])
@@ -172,8 +167,9 @@ _LINK = re.compile(r"\]\(https?://|https?://")
 
 
 def _blocks(markdown: str) -> list[str]:
-    text = "\n".join(code_free_lines(markdown))
-    return [b for b in re.split(r"\n\s*\n", text) if b.strip() and not b.lstrip().startswith("#")]
+    code = code_ranges(markdown)
+    return [markdown[a:b] for a, b in blocks(markdown)
+            if not overlaps(a, b, code) and not markdown[a:b].lstrip().startswith("#")]
 
 
 def number_flags(markdown: str, material: str) -> tuple[list[dict], list[dict]]:
@@ -185,7 +181,7 @@ def number_flags(markdown: str, material: str) -> tuple[list[dict], list[dict]]:
             if n in seen or (len(n) == 1) or n in material:
                 continue
             seen.add(n)
-            row = {"number": n, "context": re.sub(r"\s+", " ", block)[:120]}
+            row = {"number": n, "context": excerpt(block, 120)}
             (cited if _LINK.search(block) else flagged).append(row)
     return flagged, cited
 
@@ -200,24 +196,12 @@ def _c(id: str, relation: str, passed: bool | None, value=None, detail: str = ""
 
 _DASH = re.compile(r"[—―]{1,2}|\s–\s")
 _DASH_IGNORE = re.compile(r"`[^`\n]*`|[「『（(\"“]\s*[—―–…‥]+\s*[」』）)\"”]")
-KEEP_FILE = "keep.yaml"
 
 
 def dash_hits(markdown: str) -> list[str]:
     """Dashes quoted as the thing being discussed (「―」) are not punctuation."""
     return [s for line in code_free_lines(markdown) if not line.lstrip().startswith(("|", "#"))
             for s in sentences(line) if _DASH.search(_DASH_IGNORE.sub("", s))]
-
-
-def text_hash(text: str) -> str:
-    return hashlib.sha1(re.sub(r"\s+", "", text).encode()).hexdigest()[:16]
-
-
-def load_keep(wd: WorkDir) -> set[str]:
-    p = wd.root / KEEP_FILE
-    if not p.exists():
-        return set()
-    return {row["hash"] for row in yaml.safe_load(p.read_text(encoding="utf-8")) or []}
 
 
 def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: Provider | None,
@@ -227,17 +211,17 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
     use = {u.id: d.use_of(u.id) for u in units}
     by_id = {u.id: u for u in units}
     infos, idmap = as_info_units(units)
-    cov = parse_coverage(judge.complete(coverage_prompt(infos, {DRAFT: draft}), json_schema=coverage_schema()), infos, [DRAFT])
+    cov = parse_coverage(ask_json(judge, coverage_prompt(infos, {DRAFT: draft}), coverage_schema()), infos, [DRAFT])
     presence = {idmap[i]: c.v for i, c in cov.items()}
     dunits = info_units(draft)
     skips = [x.label for x in d.skip]
-    m = parse_map(judge.complete(map_prompt(dunits, units, d.takeaways, skips), json_schema=map_schema()), dunits, units,
+    m = parse_map(ask_json(judge, map_prompt(dunits, units, d.takeaways, skips), map_schema()), dunits, units,
                   len(d.takeaways), len(skips))
     space = space_per_unit(dunits, m)
     checks: list[Check] = []
 
     def short(u: Unit) -> str:
-        return re.sub(r"\s+", " ", u.text)[:80]
+        return excerpt(u.text, 80)
 
     drop = [u for u in units if use[u.id] == "drop"]
     implied = {c.id: c for c in d.live_conflicts()}
@@ -273,7 +257,7 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
     for k, t in enumerate(d.takeaways, 1):
         ok, ev = m.takeaways.get(k, (False, []))
         tk_items.append({"takeaway": t, "present": ok,
-                         "evidence": [re.sub(r"\s+", " ", dunits[e - 1].text)[:80] for e in ev]})
+                         "evidence": [excerpt(dunits[e - 1].text, 80) for e in ev]})
     checks.append(_c("takeaways", "持ち帰り → 本文から読み取れる",
                      all(x["present"] for x in tk_items) if tk_items else None,
                      f"{sum(x['present'] for x in tk_items)}/{len(tk_items)}", "", tk_items))
@@ -281,10 +265,11 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
     for du in dunits:
         src = m.sources.get(du.id, [])
         if du.id in m.firsthand and not any(by_id[s].firsthand for s in src):
-            fab.append({"unit": du.id, "text": re.sub(r"\s+", " ", du.text)[:120], "source": "judge"})
+            fab.append({"unit": du.id, "text": excerpt(du.text, 120), "source": "judge"})
     unmapped = [du for du in dunits if not m.sources.get(du.id)]
     for s in firsthand_hits(draft):
-        hit = next((du for du in unmapped if s[:20] in du.text), None)
+        at = locate(draft, s)
+        hit = next((du for du in unmapped if at and du.start <= at[0] < du.end), None)
         if hit and not any(f["unit"] == hit.id for f in fab):
             fab.append({"unit": hit.id, "text": s[:120], "source": "rule"})
     checks.append(_c("fabrication", "材料に無い一人称の体験 → 無い", not fab, len(fab),
@@ -306,7 +291,7 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
     for k, label in enumerate(skips, 1):
         explained, ev = m.skips.get(k, (False, []))
         sk_items.append({"skip": label, "explained": explained,
-                         "evidence": [re.sub(r"\s+", " ", dunits[e - 1].text)[:80] for e in ev]})
+                         "evidence": [excerpt(dunits[e - 1].text, 80) for e in ev]})
     checks.append(_c("skip_unexplained", "skip にした前提 → 本文で説明しない",
                      not any(x["explained"] for x in sk_items) if sk_items else None,
                      f"{sum(x['explained'] for x in sk_items)}/{len(sk_items)}", "説明されてしまった前提",
@@ -327,11 +312,10 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
 def surface_hits(draft: str, units: list[Unit], meta: Provider | None, runs: int = RUNS,
                  min_votes: int = MIN_VOTES) -> SurfaceReport:
     if meta is None:
-        su = split_units(draft)
-        by_id = {u.id: u for u in su}
-        hits = [SurfaceHit(id=i, category=c, text=by_id[i].text, heading=by_id[i].heading, votes=1)
-                for i, c in rule_hints(su).items()]
-        return SurfaceReport(units=len(su), hits=sorted(hits, key=lambda h: su.index(by_id[h.id])))
+        su = split_sentences(draft)
+        hints = rule_hints(su)
+        return SurfaceReport(units=len(su), hits=[SurfaceHit(id=u.id, category=hints[u.id], text=u.text, heading=u.heading,
+                                                             votes=1) for u in su if u.id in hints])
     return detect_surface(draft, meta, [u.text for u in units], runs, min_votes)
 
 
@@ -380,9 +364,9 @@ def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str = "draf
     text = wd.read(name)
     if surface_only:
         rep = CheckReport(draft=name, chars=draft_chars(info_units(text)),
-                          checks=surface_checks(text, wd.units(), meta, surface_runs, load_keep(wd), min_votes))
+                          checks=surface_checks(text, wd.units(), meta, surface_runs, KeepStore(wd).hashes(), min_votes))
     else:
-        rep = run_checks(text, wd.units(), wd.design(), judge, meta, fetch, surface_runs, load_keep(wd), min_votes)
+        rep = run_checks(text, wd.units(), wd.design(), judge, meta, fetch, surface_runs, KeepStore(wd).hashes(), min_votes)
     rep.draft = name
     stem = check_stem(name, surface_only)
     wd.write_json(f"{stem}.json", rep.model_dump())

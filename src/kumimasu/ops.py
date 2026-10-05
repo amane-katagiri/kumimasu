@@ -9,14 +9,24 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
+from .draft import read_used
 from .errors import StepError
 from .files import append_jsonl, atomic_write, read_jsonl
-from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, UnitUse
+from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, Unit, UnitUse
+from .review import (
+    ApplyResult,
+    Review,
+    ReviewContext,
+    apply_review,
+    final_name,
+    require_base,
+    save_decisions,
+)
+from .textutil import excerpt
 from .workdir import WorkDir, now
 
 if TYPE_CHECKING:
     from .llm import Provider
-    from .review import ApplyResult, Review
 
 HISTORY = "history.jsonl"
 HANDOFF = "handoff.json"
@@ -57,28 +67,26 @@ def set_stage(wd: WorkDir, new: str, round_: int | None = None) -> None:
     wd.save_project(p.model_copy(update={"stage": new, "round": p.round if round_ is None else round_}))
 
 
-def answer(wd: WorkDir, qid: str, text: str, source: str) -> Interview:
-    with LOCK:
-        require_stage(wd, "interview", action="質問への回答")
-        iv = wd.interview()
-        q = next((q for q in iv.questions if q.id == qid), None)
-        if q is None:
-            raise ValueError(f"unknown question id: {qid}")
-        if q.answer != text:
-            q.answer, q.source = text, source
-            wd.save_interview(iv)
-            record(wd, source, "answer", id=qid)
-        return iv
-
-
 def save_answers(wd: WorkDir, answers: dict, source: str) -> Interview:
     with LOCK:
         require_stage(wd, "interview", action="質問への回答")
         iv = wd.interview()
-        for qid, text in answers.items():
-            if any(q.id == qid and q.answer != str(text) for q in iv.questions):
-                iv = answer(wd, qid, str(text), source)
+        by_id = {q.id: q for q in iv.questions}
+        unknown = set(answers) - set(by_id)
+        if unknown:
+            raise ValueError(f"知らない質問です: {', '.join(sorted(unknown))}")
+        changed = [qid for qid, text in answers.items() if by_id[qid].answer != str(text)]
+        for qid in changed:
+            by_id[qid].answer, by_id[qid].source = str(answers[qid]), source
+        if changed:
+            wd.save_interview(iv)
+            for qid in changed:
+                record(wd, source, "answer", id=qid)
         return iv
+
+
+def answer(wd: WorkDir, qid: str, text: str, source: str) -> Interview:
+    return save_answers(wd, {qid: text}, source)
 
 
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
@@ -86,7 +94,8 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
     units ({id: use}). A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides."""
     with LOCK:
         require_stage(wd, "design", action="設計の変更")
-        d = sync_design(wd.design(), wd.units())
+        units = {u.id: u for u in wd.units()}
+        d = sync_design(wd.design(), list(units.values()))
         upd: dict = {}
         for key in ("purpose", "form_prefs"):
             if key in body:
@@ -102,15 +111,21 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
             upd["skip"] = [Skip.model_validate(x) for x in body["skip"]]
         if "aside" in body:
             upd["aside"] = [Aside.model_validate(x) for x in body["aside"]]
+        if isinstance(t := body.get("toggle_skip"), dict):
+            unit = _known_unit(units, t.get("unit"))
+            upd["skip"] = toggled_skip(d, unit.id, bool(t.get("on")), str(t.get("label") or ""), unit.text)
+        if isinstance(t := body.get("toggle_aside"), dict):
+            upd["aside"] = toggled_aside(d, _known_unit(units, t.get("unit")).id, bool(t.get("on")),
+                                         str(t.get("where") or ""))
         if "target_length" in body:
             upd["target_length"] = int(body["target_length"])
         uses = body.get("units") or {}
         if uses:
             unknown = set(uses) - {u.id for u in d.units}
             if unknown:
-                raise ValueError(f"unknown unit ids: {', '.join(sorted(unknown))}")
+                raise ValueError(f"知らない単位です: {', '.join(sorted(unknown))}")
             if any(v not in USES for v in uses.values()):
-                raise ValueError(f"use must be one of {', '.join(USES)}")
+                raise ValueError(f"use は {', '.join(USES)} のどれかにしてください")
             upd["units"] = [UnitUse(id=u.id, use=uses.get(u.id, u.use),
                                     why=u.why if uses.get(u.id, u.use) == u.use else "手で変更")
                             for u in d.units]
@@ -124,24 +139,26 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
         return d
 
 
-def toggled_skip(d: Design, unit_id: str, on: bool, label: str = "", text: str = "") -> list[dict]:
+def _known_unit(units: dict[str, Unit], unit_id) -> Unit:
+    if unit_id not in units:
+        raise ValueError(f"知らない単位です: {unit_id}")
+    return units[unit_id]
+
+
+def toggled_skip(d: Design, unit_id: str, on: bool, label: str, text: str) -> list[Skip]:
     if on:
         if any(unit_id in x.units for x in d.skip):
-            return [x.model_dump() for x in d.skip]
-        return [x.model_dump() for x in d.skip] + [
-            {"label": label or re.sub(r"\s+", " ", text)[:20], "units": [unit_id], "why": "手で追加"}]
-    return [x.model_copy(update={"units": [i for i in x.units if i != unit_id]}).model_dump()
-            for x in d.skip if x.units != [unit_id]]
+            return list(d.skip)
+        return [*d.skip, Skip(label=label or excerpt(text, 20), units=[unit_id], why="手で追加")]
+    return [x.model_copy(update={"units": [i for i in x.units if i != unit_id]}) for x in d.skip if x.units != [unit_id]]
 
 
-def toggled_aside(d: Design, unit_id: str, on: bool, where: str = "") -> list[dict]:
-    rest = [a.model_dump() for a in d.aside if a.id != unit_id]
-    return rest + [{"id": unit_id, "where": where, "why": "手で追加"}] if on else rest
+def toggled_aside(d: Design, unit_id: str, on: bool, where: str) -> list[Aside]:
+    rest = [a for a in d.aside if a.id != unit_id]
+    return [*rest, Aside(id=unit_id, where=where, why="手で追加")] if on else rest
 
 
 def decide(wd: WorkDir, base: str, body: dict, source: str) -> Review:
-    from .review import require_base, save_decisions
-
     with LOCK:
         require_stage(wd, "review", action="最終チェックの決定")
         require_base(base)
@@ -151,12 +168,11 @@ def decide(wd: WorkDir, base: str, body: dict, source: str) -> Review:
         return rev
 
 
-def apply(wd: WorkDir, base: str, provider: Provider | None, source: str, regenerate: tuple[str, ...] = ()) -> ApplyResult:
-    from .review import apply_review
-
+def apply(wd: WorkDir, base: str, provider: Provider | None, source: str, regenerate: tuple[str, ...] = (),
+          ctx: ReviewContext | None = None) -> ApplyResult:
     with LOCK:
         require_stage(wd, "review", action="反映")
-        res = apply_review(wd, base, provider, regenerate)
+        res = apply_review(wd, base, provider, regenerate, ctx)
         record(wd, source, "apply", draft=base, calls=res.calls, regenerate=list(regenerate))
         return res
 
@@ -170,8 +186,6 @@ def article_info(wd: WorkDir, final_text: str) -> dict:
 
 def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Provider] | None = None,
             draft: str = "") -> dict:
-    from .review import final_name, needs_apply, needs_rewrite_call
-
     with LOCK:
         p = wd.project()
         cur = p.stage
@@ -187,8 +201,6 @@ def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Pro
             raise StageError("まだ設計がありません（kumimasu design）")
         base = draft or wd.review_draft()
         if cur in ("drafting", "review"):
-            from .review import require_base
-
             require_base(base)
             if not wd.is_plain_file(base):
                 raise StageError(f"{base} がありません（kumimasu draft）")
@@ -196,12 +208,11 @@ def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Pro
             wd.save_project(wd.project().model_copy(update={"review_draft": base}))
         extra: dict = {}
         if cur == "review":
-            if needs_apply(wd, base):
-                provider = rewriter() if rewriter and needs_rewrite_call(wd, base) else None
-                apply(wd, base, provider, source)
+            ctx = ReviewContext.load(wd, base)
+            if ctx.needs_apply():
+                provider = rewriter() if rewriter and ctx.needs_rewrite_call() else None
+                apply(wd, base, provider, source, ctx=ctx)
             final = final_name(base)
-            from .draft import read_used
-
             extra = {"final": str((wd.root / final).resolve()), "draft": base,
                      "article": article_info(wd, wd.read(final)), "used": read_used(wd, base)}
         autos = [h for h in history(wd) if h["source"] == "auto" and h["stage"] == cur and h["round"] == p.round]

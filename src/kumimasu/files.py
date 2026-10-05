@@ -6,6 +6,8 @@ import stat
 import tempfile
 from pathlib import Path
 
+import yaml
+
 from .errors import StepError
 
 PRIVATE_FILE = 0o600
@@ -57,3 +59,7 @@ def create_new(path: Path, data: bytes, mode: int = PRIVATE_FILE) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
+
+
+def dump_yaml(data) -> str:
+    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=1000)

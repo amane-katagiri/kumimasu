@@ -6,7 +6,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from .config import PROJECT_FILE, Config, load, user_path
+from .config import PROJECT_FILE, Config, user_path
+from .files import atomic_write, dump_yaml
 from .model import Rule
 from .rules import default_rules, dump_rules, packaged_rules, parse_rules
 from .workdir import WorkDir
@@ -20,10 +21,13 @@ def _layer_value(cfg: Config, name: str, key: str):
     return layer.values.get(key) if layer else None
 
 
-def rules_target(scope: str, cwd: Path, create: bool) -> tuple[Path, list[str]]:
+def _check_scope(scope: str) -> None:
     if scope not in SCOPES:
-        raise ValueError(f"--scope must be one of {', '.join(SCOPES)}")
-    cfg = load(None, cwd)
+        raise ValueError(f"--scope は {' か '.join(SCOPES)} にしてください")
+
+
+def rules_target(scope: str, cwd: Path, cfg: Config, create: bool) -> tuple[Path, list[str]]:
+    _check_scope(scope)
     notes: list[str] = []
     if scope == "user":
         value = _layer_value(cfg, "user", "rules_file") or _layer_value(cfg, "default", "rules_file")
@@ -38,11 +42,10 @@ def rules_target(scope: str, cwd: Path, create: bool) -> tuple[Path, list[str]]:
                 cfg_file = cwd / PROJECT_FILE
                 text = cfg_file.read_text(encoding="utf-8") if cfg_file.exists() else ""
                 sep = "" if not text or text.endswith("\n") else "\n"
-                cfg_file.write_text(f"{text}{sep}rules_file: {PROJECT_RULES}\n", encoding="utf-8")
+                atomic_write(cfg_file, f"{text}{sep}rules_file: {PROJECT_RULES}\n")
                 notes.append(f"{cfg_file} に rules_file: {PROJECT_RULES} を足しました")
     if create and not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(dump_rules(packaged_rules()), encoding="utf-8")
+        atomic_write(path, dump_rules(packaged_rules()))
         notes.append(f"{path} を同梱の既定のルールで作りました")
     return path, notes
 
@@ -51,27 +54,35 @@ def read_target(path: Path) -> list[Rule]:
     return parse_rules(path.read_text(encoding="utf-8"), str(path)) if path.exists() else packaged_rules()
 
 
-def _index(n: str, size: int) -> int:
+def list_index(n: str, size: int) -> int:
     if not n.isdigit() or not 1 <= int(n) <= size:
-        raise ValueError(f"number must be 1–{size}")
+        raise ValueError(f"番号は 1–{size} にしてください")
     return int(n) - 1
 
 
-def edit_rules(scope: str, action: str, args: list[str], cwd: Path) -> tuple[Path, list[Rule], list[str]]:
-    path, notes = rules_target(scope, cwd, create=True)
-    rules = read_target(path)
+RULE_USAGE = "on N | off N | edit N TEXT | add TEXT | rm N"
+
+
+def edit_rule_list(rules: list[Rule], action: str, args: list[str]) -> list[Rule]:
+    rules = [r.model_copy() for r in rules]
     match action:
         case "on" | "off" if len(args) == 1:
-            rules[_index(args[0], len(rules))].on = action == "on"
+            rules[list_index(args[0], len(rules))].on = action == "on"
         case "edit" if len(args) == 2:
-            rules[_index(args[0], len(rules))].text = args[1].strip()
+            rules[list_index(args[0], len(rules))].text = args[1].strip()
         case "add" if len(args) == 1:
             rules.append(Rule(text=args[0].strip()))
         case "rm" if len(args) == 1:
-            rules.pop(_index(args[0], len(rules)))
+            rules.pop(list_index(args[0], len(rules)))
         case _:
-            raise ValueError("usage: rules on N | off N | edit N TEXT | add TEXT | rm N --scope user|project")
-    path.write_text(dump_rules(rules), encoding="utf-8")
+            raise ValueError(f"使い方: {RULE_USAGE}")
+    return rules
+
+
+def edit_rules(scope: str, action: str, args: list[str], cwd: Path, cfg: Config) -> tuple[Path, list[Rule], list[str]]:
+    path, notes = rules_target(scope, cwd, cfg, create=True)
+    rules = edit_rule_list(read_target(path), action, args)
+    atomic_write(path, dump_rules(rules))
     return path, rules, notes
 
 
@@ -85,8 +96,7 @@ class Diff(BaseModel):
     default: object = None
 
 
-def rules_diff(wd: WorkDir) -> list[Diff]:
-    cfg = load(wd.root)
+def rules_diff(wd: WorkDir, cfg: Config) -> list[Diff]:
     base = default_rules(cfg.rules_path())
     mine = wd.design().rules
     a, b = [r.text for r in base], [r.text for r in mine]
@@ -117,9 +127,9 @@ def _pick(diffs: list[Diff], only: list[str]) -> list[Diff]:
     return [d for d in diffs if str(d.n) in want or d.key in want]
 
 
-def rules_save(wd: WorkDir, scope: str, only: list[str], cwd: Path) -> tuple[Path, list[Diff], list[str]]:
-    picked = _pick(rules_diff(wd), only)
-    path, notes = rules_target(scope, cwd, create=True)
+def rules_save(wd: WorkDir, cfg: Config, scope: str, only: list[str], cwd: Path) -> tuple[Path, list[Diff], list[str]]:
+    picked = _pick(rules_diff(wd, cfg), only)
+    path, notes = rules_target(scope, cwd, cfg, create=True)
     rules = read_target(path)
     texts = [r.text for r in rules]
     for d in picked:
@@ -140,12 +150,11 @@ def rules_save(wd: WorkDir, scope: str, only: list[str], cwd: Path) -> tuple[Pat
                     if r.text == d.text:
                         r.on = d.kind == "enabled"
         texts = [r.text for r in rules]
-    path.write_text(dump_rules(rules), encoding="utf-8")
+    atomic_write(path, dump_rules(rules))
     return path, picked, notes
 
 
-def prefs_diff(wd: WorkDir) -> list[Diff]:
-    cfg = load(wd.root)
+def prefs_diff(wd: WorkDir, cfg: Config) -> list[Diff]:
     d = wd.design()
     out: list[Diff] = []
 
@@ -169,8 +178,7 @@ def prefs_diff(wd: WorkDir) -> list[Diff]:
 
 
 def config_target(scope: str, cwd: Path) -> Path:
-    if scope not in SCOPES:
-        raise ValueError(f"--scope must be one of {', '.join(SCOPES)}")
+    _check_scope(scope)
     return user_path() if scope == "user" else cwd / PROJECT_FILE
 
 
@@ -195,13 +203,11 @@ def write_config_values(path: Path, values: dict) -> None:
     data = yaml.safe_load(text) or {}
     for k, v in values.items():
         _set(data, k, v)
-    body = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=1000)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(("\n".join(head).rstrip("\n") + "\n" if any(h.strip() for h in head) else "") + body, encoding="utf-8")
+    atomic_write(path, ("\n".join(head).rstrip("\n") + "\n" if any(h.strip() for h in head) else "") + dump_yaml(data))
 
 
-def prefs_save(wd: WorkDir, scope: str, only: list[str], cwd: Path) -> tuple[Path, list[Diff]]:
-    picked = _pick(prefs_diff(wd), only)
+def prefs_save(wd: WorkDir, cfg: Config, scope: str, only: list[str], cwd: Path) -> tuple[Path, list[Diff]]:
+    picked = _pick(prefs_diff(wd, cfg), only)
     path = config_target(scope, cwd)
     values: dict = {}
     for d in picked:
@@ -213,5 +219,4 @@ def prefs_save(wd: WorkDir, scope: str, only: list[str], cwd: Path) -> tuple[Pat
             values[d.key] = d.value
     if values:
         write_config_values(path, values)
-        load(wd.root, cwd)
     return path, picked

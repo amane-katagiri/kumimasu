@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 
 from .generate import DATA_NOTE_JA
 from .glue import GLUE_RULE, material_grams, traceable
-from .llm import extract_json
-from .metadiscourse import CATEGORIES, LEADS, Unit, rule_hits, split_units
+from .llm import STR, arr, ask_json, enum, obj, rows
+from .metadiscourse import CATEGORIES, LEADS, Sentence, rule_hits, split_sentences
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -51,7 +51,7 @@ class SurfaceReport(BaseModel):
         return len(self.runs)
 
 
-def surface_prompt(units: list[Unit], hints: dict[str, str], run: int, runs: int) -> str:
+def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int, runs: int) -> str:
     lines, current = [], None
     for u in units:
         if u.kind == "sentence" and u.section != current:
@@ -78,16 +78,12 @@ def surface_prompt(units: list[Unit], hints: dict[str, str], run: int, runs: int
 
 
 def surface_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["items"], "properties": {"items": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["id", "category"],
-                                   "properties": {"id": {"type": "string", "pattern": "^[MH][0-9]+$"},
-                                                  "category": {"type": "string", "enum": list(SURFACE_CATEGORIES)}}}}}}
+    return obj(items=arr(obj(id=STR | {"pattern": "^[MH][0-9]+$"}, category=enum(*SURFACE_CATEGORIES))))
 
 
-def parse_picks(raw: str, by_id: dict[str, Unit]) -> list[Pick]:
-    data = extract_json(raw)
+def parse_picks(data: dict, by_id: dict[str, Sentence]) -> list[Pick]:
     out, seen = [], set()
-    for item in data.get("items", []) if isinstance(data, dict) else []:
+    for item in rows(data, "items"):
         uid, cat = item.get("id"), item.get("category")
         if uid not in by_id or cat not in SURFACE_CATEGORIES or uid in seen:
             continue
@@ -98,7 +94,7 @@ def parse_picks(raw: str, by_id: dict[str, Unit]) -> list[Pick]:
     return out
 
 
-def rule_hints(units: list[Unit]) -> dict[str, str]:
+def rule_hints(units: list[Sentence]) -> dict[str, str]:
     hints = {h.id: h.category for h in rule_hits(units)}
     for u in units:
         if u.kind == "sentence" and u.id not in hints and GLUE_RULE.search(u.text):
@@ -108,14 +104,14 @@ def rule_hints(units: list[Unit]) -> dict[str, str]:
 
 def detect_surface(markdown: str, provider: Provider, material: list[str] | None = None, runs: int = RUNS,
                    min_votes: int = MIN_VOTES) -> SurfaceReport:
-    units = split_units(markdown)
+    units = split_sentences(markdown)
     by_id = {u.id: u for u in units}
     hints = rule_hints(units)
     if not any(u.kind == "sentence" for u in units):
         return SurfaceReport(units=len(units), rule=sorted(hints))
 
     def one(i: int) -> list[Pick]:
-        return parse_picks(provider.complete(surface_prompt(units, hints, i, runs), json_schema=surface_schema()), by_id)
+        return parse_picks(ask_json(provider, surface_prompt(units, hints, i, runs), surface_schema()), by_id)
 
     first = min(2, runs)
     with ThreadPoolExecutor(max(1, runs)) as ex:

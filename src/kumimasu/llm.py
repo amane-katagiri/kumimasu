@@ -62,6 +62,48 @@ def extract_json(text: str) -> Any:
     raise ValueError(f"unterminated JSON in: {text[:120]!r}")
 
 
+def ask_json(provider: Provider, prompt: str, schema: dict) -> dict:
+    raw = provider.complete(prompt, json_schema=schema)
+    try:
+        data = extract_json(raw)
+    except ValueError as e:
+        raise LLMError(f"LLM の応答から JSON を読めません: {e}") from e
+    if not isinstance(data, dict):
+        raise LLMError(f"LLM の応答が JSON のオブジェクトではありません: {raw[:120]!r}")
+    return data
+
+
+def rows(data: dict, key: str) -> list[dict]:
+    value = data.get(key)
+    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+
+
+def strings(data: dict, key: str) -> list[str]:
+    value = data.get(key)
+    return [str(x).strip() for x in value if isinstance(x, (str, int, float))] if isinstance(value, list) else []
+
+
+def ask_replacements(provider: Provider, prompt: str) -> dict[str, str]:
+    data = ask_json(provider, prompt, obj(items=arr(obj(id=STR, replacement=STR))))
+    return {str(x.get("id")): str(x.get("replacement", "")).strip() for x in rows(data, "items")}
+
+
+STR: dict = {"type": "string"}
+INT: dict = {"type": "integer"}
+
+
+def enum(*values: str) -> dict:
+    return {"type": "string", "enum": list(values)}
+
+
+def arr(items: dict, max_items: int | None = None) -> dict:
+    return {"type": "array", "items": items} | ({"maxItems": max_items} if max_items is not None else {})
+
+
+def obj(**props: dict) -> dict:
+    return {"type": "object", "additionalProperties": False, "required": list(props), "properties": props}
+
+
 class FakeProvider:
     name = "fake"
 
@@ -176,7 +218,7 @@ class AnthropicProvider:
     name = "anthropic"
 
     def __init__(self, model: str = "claude-haiku-4-5", max_tokens: int = 1024) -> None:
-        import anthropic
+        import anthropic  # optional dependency: kumimasu[anthropic]
 
         self.model = model
         self.max_tokens = max_tokens
@@ -195,7 +237,7 @@ class OpenAIProvider:
     name = "openai"
 
     def __init__(self, model: str = "gpt-5-mini") -> None:
-        import openai
+        import openai  # optional dependency: kumimasu[openai]
 
         self.model = model
         self._client = openai.OpenAI()
@@ -205,6 +247,24 @@ class OpenAIProvider:
             {"role": "user", "content": prompt + _schema_hint(json_schema)}]
         resp = self._client.chat.completions.create(model=self.model, messages=messages)
         return resp.choices[0].message.content or ""
+
+
+class CountingProvider:
+    def __init__(self, inner: Provider) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.model = inner.model
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
+        with self._lock:
+            self.calls += 1
+        return self.inner.complete(prompt, system=system, json_schema=json_schema)
+
+    @property
+    def misses(self) -> int:
+        return getattr(self.inner, "misses", self.calls)
 
 
 class CachedProvider:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import re
-
 from . import ops
 from .design import sync_design
+from .review import ReviewContext, final_name
+from .textutil import excerpt
 from .workdir import WorkDir
 
 NEXT_STEP = {
@@ -17,8 +17,7 @@ SHORT = 70
 
 
 def _short(text: str, n: int = SHORT) -> str:
-    t = re.sub(r"\s+", " ", text).strip()
-    return t if len(t) <= n else t[:n] + "…"
+    return excerpt(text, n, ellipsis=True)
 
 
 def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
@@ -42,14 +41,13 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
             "rules": [{"n": i, "on": r.on, "text": r.text} for i, r in enumerate(d.rules, 1)],
             "warnings": [c.message() for c in d.live_conflicts()]}
     elif part in ("review", "done"):
-        from .review import final_name, load_review, needs_apply
-
         base = wd.review_draft()
-        if (wd.root / base).is_file():
-            rev = load_review(wd, base)
+        if wd.is_plain_file(base):
+            ctx = ReviewContext.load(wd, base)
+            rev = ctx.review
             snap["review"] = {
                 "draft": base, "final": final_name(base) if (wd.root / final_name(base)).is_file() else None,
-                "needs_apply": needs_apply(wd, base),
+                "needs_apply": ctx.needs_apply(),
                 "items": [{"id": i.id, "kind": i.kind, "category": i.category, "votes": i.votes, "decision": i.decision,
                            "note": i.note, "text": _short(i.text), "placed": i.start is not None,
                            "rewrite": ({"result": _short(i.rewrite.result, 120), "source": i.rewrite.source}

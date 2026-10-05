@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import always_ask, defaults, roles, settings
 from test_steps import PROJECT, SAMPLES, scripted
 from typer.testing import CliRunner
 
@@ -41,9 +42,9 @@ def designed(root: Path) -> WorkDir:
     p = scripted()
     w, _ = init_workdir(root, PROJECT, [SAMPLES / "notes.md", SAMPLES / "rename.sh"])
     mark(w, p, p)
-    interview(w, p)
+    interview(w, p, always_ask())
     ops.confirm(w, "agent-chat")
-    design(w, p)
+    design(w, p, defaults())
     return w
 
 
@@ -59,7 +60,7 @@ def test_always_ask_is_added_once(cwd):
     p = scripted()
     w, _ = init_workdir(cwd / "w", PROJECT, [SAMPLES / "notes.md"])
     mark(w, p, p)
-    qs = interview(w, p).questions
+    qs = interview(w, p, always_ask()).questions
     assert [q.question for q in qs].count("m4 の LINE の写真で、EXIF が消えていると気づいたときに何を考えましたか") == 1
     assert qs[-1].question == "一番の驚きは？" and qs[-1].id == f"q{len(qs)}"
 
@@ -75,7 +76,7 @@ def test_design_takes_the_defaults(cwd):
 
     prompt = draft_prompt(w.project(), d, w.units())
     assert "常体" in prompt and "著者の好み: 比較は表、手順は番号付きリスト" in prompt and "## 書かない事柄" in prompt
-    assert prefs_diff(w) == []
+    assert prefs_diff(w, settings()) == []
 
 
 def test_used_settings_are_recorded_shown_and_handed_over(cwd):
@@ -84,7 +85,7 @@ def test_used_settings_are_recorded_shown_and_handed_over(cwd):
     rules[0].on = False
     w.save_design(w.design().model_copy(update={"rules": rules}))
     ops.confirm(w, "agent-chat")
-    draft(w, scripted())
+    draft(w, scripted(), roles())
     used = read_used(w, "draft.md")
     assert used["providers"]["writer"] == "fake:fake-1" and used["providers"]["judge"] == "claude-cli:sonnet"
     assert rules[0].text in used["rules_off"] and rules[0].text not in used["rules"] and used["register"] == "keitai"
@@ -131,7 +132,7 @@ def test_rules_diff_and_save(cwd):
     del rules[4]
     rules.append(Rule(text="この記事で足したルール"))
     w.save_design(d.model_copy(update={"rules": rules}))
-    diffs = rules_diff(w)
+    diffs = rules_diff(w, settings())
     assert [(x.kind, x.text) for x in diffs] == [
         ("disabled", rules[1].text), ("edited", "書き換えた三つ目"), ("removed", d.rules[4].text),
         ("added", "この記事で足したルール")]
@@ -141,10 +142,10 @@ def test_rules_diff_and_save(cwd):
     run("rules", "save", w.root, code=2)
     out = run("rules", "save", w.root, "--scope", "user", "--only", "1,4")
     assert "2 changes" in out
-    left = rules_diff(w)
+    left = rules_diff(w, settings())
     assert [x.kind for x in left] == ["edited", "removed"]
     run("rules", "save", w.root, "--scope", "user")
-    assert rules_diff(w) == []
+    assert rules_diff(w, settings()) == []
 
 
 def test_prefs_diff_and_save(cwd):
@@ -152,7 +153,7 @@ def test_prefs_diff_and_save(cwd):
     w = designed(cwd / "w")
     d = w.design()
     w.save_design(d.model_copy(update={"formality": "joutai", "form_prefs": "表を多めに", "avoid": d.avoid + ["毎回の自己紹介"]}))
-    diffs = prefs_diff(w)
+    diffs = prefs_diff(w, settings())
     keys = [x.key for x in diffs]
     assert "defaults.register" in keys and "defaults.forms" in keys and keys.count("defaults.avoid") == 1
     out = run("prefs", "diff", w.root)
@@ -160,11 +161,11 @@ def test_prefs_diff_and_save(cwd):
     out = run("prefs", "save", w.root, "--scope", "project", "--only", "defaults.register,defaults.forms")
     text = (cwd / "kumimasu.yaml").read_text(encoding="utf-8")
     assert text.startswith("# このプロジェクトの設定\n") and "register: joutai" in text and "cache_dir: c" in text
-    keys = [x.key for x in prefs_diff(w)]
+    keys = [x.key for x in prefs_diff(w, settings())]
     assert "defaults.register" not in keys and "defaults.forms" not in keys
-    n = next(x.n for x in prefs_diff(w) if x.value == "毎回の自己紹介")
+    n = next(x.n for x in prefs_diff(w, settings()) if x.value == "毎回の自己紹介")
     run("prefs", "save", w.root, "--scope", "user", "--only", str(n))
     assert yaml.safe_load(user_cfg().read_text(encoding="utf-8"))["defaults"]["avoid"] == ["毎回の自己紹介"]
-    assert all(x.value != "毎回の自己紹介" for x in prefs_diff(w))
+    assert all(x.value != "毎回の自己紹介" for x in prefs_diff(w, settings()))
     run("prefs", "nope", w.root, code=2)
     assert json.loads(CliRunner().invoke(app, ["config", str(w.root), "--json"]).stdout)[-1]["key"] == "interview.always_ask"

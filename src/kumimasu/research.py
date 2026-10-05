@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from .generate import DATA_NOTE_JA
-from .llm import extract_json
+from .llm import INT, STR, arr, ask_json, obj, rows
 from .model import Design, Project
 from .workdir import WorkDir
 
@@ -52,10 +52,7 @@ class Research(BaseModel):
 
 
 def research_schema() -> dict:
-    return {"type": "object", "additionalProperties": False, "required": ["findings"], "properties": {"findings": {
-        "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["topic", "claim", "source"],
-                                   "properties": {"topic": {"type": "integer"}, "claim": {"type": "string"},
-                                                  "source": {"type": "string"}}}}}}
+    return obj(findings=arr(obj(topic=INT, claim=STR, source=STR)))
 
 
 def research_prompt(p: Project, d: Design) -> str:
@@ -64,10 +61,9 @@ def research_prompt(p: Project, d: Design) -> str:
                                      topics="\n".join(f"{i}. {t}" for i, t in enumerate(d.research, 1)))
 
 
-def parse_research(raw: str, d: Design) -> list[Finding]:
-    data = extract_json(raw)
+def parse_research(data: dict, d: Design) -> list[Finding]:
     out = []
-    for row in data.get("findings", []) if isinstance(data, dict) else []:
+    for row in rows(data, "findings"):
         claim, source = str(row.get("claim", "")).strip(), str(row.get("source", "")).strip()
         if claim and len(claim) <= CLAIM_CHARS and source.startswith(("https://", "http://")) and not any(c.isspace() for c in source):
             topic = row.get("topic") if isinstance(row.get("topic"), int) and 1 <= row["topic"] <= len(d.research) else 0
@@ -85,8 +81,7 @@ def load_research(wd: WorkDir) -> Research | None:
 
 
 def research(wd: WorkDir, provider: Provider, d: Design) -> Research:
-    found = parse_research(provider.complete(research_prompt(wd.project(), d), json_schema=research_schema()), d) \
-        if d.research else []
+    found = parse_research(ask_json(provider, research_prompt(wd.project(), d), research_schema()), d) if d.research else []
     res = Research(topics=d.research, findings=found, researcher=f"{provider.name}:{provider.model}")
     wd.write(research_name(wd), json.dumps(res.model_dump(), ensure_ascii=False, indent=1) + "\n")
     return res

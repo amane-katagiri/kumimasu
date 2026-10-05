@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from .files import dump_yaml
 from .model import Rule
 
 PACKAGED = "default_rules.yaml"
@@ -29,7 +30,7 @@ def parse_rules(text: str, where: str) -> list[Rule]:
 
 def dump_rules(rules: list[Rule]) -> str:
     rows = [r.text if r.on else {"text": r.text, "on": False} for r in rules]
-    return yaml.safe_dump(rows, allow_unicode=True, sort_keys=False, width=1000)
+    return dump_yaml(rows)
 
 
 def packaged_rules() -> list[Rule]:
