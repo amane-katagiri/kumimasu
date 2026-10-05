@@ -1,137 +1,60 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import socket
+import stat
+import subprocess
 import tempfile
+import time
+import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import yaml
-from conftest import always_ask, defaults, roles, serving
+from conftest import (
+    BAD_DRAFT,
+    GOOD_DRAFT,
+    PROJECT,
+    SAMPLES,
+    VOTES,
+    always_ask,
+    defaults,
+    roles,
+    scripted,
+    serving,
+    surface_fake,
+)
 from typer.testing import CliRunner
 
 from kumimasu import cli_common as cc
-from kumimasu.check import Votes, check, dash_hits, number_flags
+from kumimasu import factcheck, ops, rules
+from kumimasu.check import check, dash_hits, number_flags
 from kumimasu.cli import app
-from kumimasu.design import design, sync_design
+from kumimasu.design import design, noise_workdir, sync_design
 from kumimasu.draft import draft, draft_prompt
 from kumimasu.errors import StepError
 from kumimasu.factcheck import UrlStatus
 from kumimasu.interview import interview
-from kumimasu.llm import FakeProvider, get_provider
+from kumimasu.llm import (
+    CachedProvider,
+    ClaudeCliProvider,
+    CodexCliProvider,
+    FakeProvider,
+    get_provider,
+)
 from kumimasu.mark import mark
-from kumimasu.model import Design, Project, UnitUse
+from kumimasu.model import Design, Rule, UnitUse
 from kumimasu.polish import POLISH_RULES, Flag, apply_replacements, neighborhood, polish
+from kumimasu.research import load_research, research
+from kumimasu.review import export_final
 from kumimasu.revise import instructions, revise
+from kumimasu.surface import detect_surface
 from kumimasu.textutil import blocks
 from kumimasu.workdir import WorkDir, init_workdir
-
-VOTES = Votes(3, 2)
-ROOT = Path(__file__).resolve().parent.parent
-SAMPLES = ROOT / "tests" / "samples"
-PROJECT = Project(topic="写真の名前を撮影日時にそろえる", audience="写真の整理に困っている人", kind="実用", length=600)
-
-GOOD_DRAFT = """# 写真の名前を撮影日時にそろえる
-
-スマホとデジカメで IMG_1234.JPG と DSC01234.JPG のように名前がばらばらでした。
-
-試したら、スマホの写真 312 枚のうち 9 枚に撮影日時がありませんでした。どれも LINE で受け取った写真で、LINE 経由の写真は EXIF が消えています。そこでファイルの更新日時で代用しました。更新日時は写真を保存した日時なので、撮影日とは数日ずれることがあります。それでも並び順はだいたい保たれるので、私はこれで十分だと判断しました。
-
-`exiftool -d '%Y%m%d-%H%M%S%%-c.%%e' '-FileName<DateTimeOriginal' DIR` の 1 行で済みます。書式は [exiftool の説明](https://exiftool.org/filename.html#codes) にあります。
-"""
-
-BAD_DRAFT = """# 写真の名前を撮影日時にそろえる
-
-この記事では、写真の名前をそろえる方法を見ていきましょう。
-
-- **EXIF**: 撮影日時を記録する仕組みです 📷
-- **タイムゾーン**: 海外で撮った写真は現地時刻のまま並びます
-
-私は 2000 枚の写真で試してみたところ、3 時間かかりました。
-"""
-
-
-def surface_fake(prompt: str) -> str:
-    return json.dumps({"items": [{"id": m[1], "category": m[2]}
-                                 for m in re.finditer(r"^\[([MH]\d+)\] .*?← 規則: (\w+)$", prompt, re.MULTILINE)]})
-
-
-def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_ok: bool = True, deep_unit_chars: bool = True,
-             skip_explained: bool = False):
-    def respond(prompt: str) -> str:
-        if "ウェブで下調べ" in prompt:
-            return json.dumps({"findings": [
-                {"topic": 1, "claim": "exiftool の -d は strftime の書式を受け取る。", "source": "https://exiftool.org/filename.html"},
-                {"topic": 1, "claim": "出典の無い主張", "source": "not a url"},
-                {"topic": 9, "claim": "LINE は画像の EXIF を消す。", "source": "https://example.com/line"}]})
-        if "本題に要らない話が混じって" in prompt:
-            return json.dumps({"skip": [{"label": "EXIF とは何か", "units": ["m2", "m4", "m99"], "why": "一般的"},
-                                        {"label": "x" * 40, "units": [], "why": ""},
-                                        {"label": "タイムゾーンの仕組み", "units": [], "why": "書き足しがち"}],
-                               "aside": [{"id": "m7", "where": "名前を付け終えたあと", "why": "気にしないと決めた"},
-                                         {"id": "m3", "where": "", "why": "検索で届く"}]})
-        if "情報を運ばない文と見出しを選び" in prompt:
-            return surface_fake(prompt)
-        if "同じ情報を述べている単位の組" in prompt:
-            return json.dumps({"groups": [["m9", "m2", "m9"], ["m3", "zz"]]})
-        if "# 使わない材料" in prompt:
-            return json.dumps({"conflicts": [{"id": "m3", "level": "yes", "by": ["m12", "m2"], "note": "コマンドが出る"},
-                                             {"id": "m4", "level": "yes", "by": ["m5"], "note": ""},
-                                             {"id": "m2", "level": "no", "by": [], "note": ""}],
-                               "avoid": ["写真管理アプリの比較", "FAQ", "x" * 40]})
-        if "一覧の文だけを直して" in prompt:
-            ids = re.findall(r"^\[(F\d+)\]", prompt, re.MULTILINE)
-            return json.dumps({"items": [{"id": i, "replacement": "" if k == 0 else "撮影日時は EXIF にあります。"}
-                                         for k, i in enumerate(ids)]})
-        if "下書きの単位" in prompt:
-            n = len(re.findall(r"^\[(\d+)\]（", prompt.split("# 下書きの単位", 1)[1], re.MULTILINE))
-            units = []
-            for i in range(1, n + 1):
-                if i == 2 and deep_unit_chars:
-                    units.append({"id": i, "from": ["m4", "m5", "q1"], "firsthand": "yes"})
-                elif i == 2:
-                    units.append({"id": i, "from": [], "firsthand": "yes"})
-                else:
-                    units.append({"id": i, "from": ["m1"] if i == 1 else ["m3"], "firsthand": "no"})
-            return json.dumps({"units": units, "takeaways": [{"index": k, "present": "yes" if takeaway_ok else "no",
-                                                               "evidence": [2]} for k in (1, 2, 3)],
-                               "skips": [{"index": k, "explained": "yes" if skip_explained and k == 1 else "no",
-                                          "evidence": [1]} for k in (1, 2)]})
-        if "# 対象の記事の単位" in prompt:
-            ids = [int(x) for x in re.findall(r"^\[(\d+)\]（", prompt.split("# 対象の記事の単位", 1)[1], re.MULTILINE)]
-            if "## W" in prompt:
-                return json.dumps({"units": [{"id": i, "v": "yes" if i in (2, 3) else "no", "in": ["W"]}
-                                             for i in ids]})
-            return json.dumps({"units": [{"id": i, "v": "yes" if (i not in (2, 3) or present_drop) else "no", "in": ["D"]}
-                                         for i in ids]})
-        if "質問を" in prompt:
-            return json.dumps({"questions": [
-                {"question": "m4 の LINE の写真で、EXIF が消えていると気づいたときに何を考えましたか", "why": "deep の候補",
-                 "units": ["m4", "m99"]},
-                {"question": "読者に 1 つだけ持ち帰ってもらうなら何ですか", "why": "持ち帰り", "units": []},
-                {"question": "", "why": "", "units": []}]})
-        if "記事の設計を提案" in prompt:
-            return json.dumps({"purpose": "撮影日時で名前をそろえる手順と、EXIF の無い写真の扱いが分かる",
-                               "takeaways": ["EXIF の無い写真は更新日時で代用する", "二つ目", "三つ目", "四つ目"],
-                               "units": [{"id": "m2", "use": "drop", "why": "一般的"},
-                                         {"id": "m4", "use": "deep", "why": "手元だけ"},
-                                         {"id": "q1", "use": "deep", "why": "回答"},
-                                         {"id": "m5", "use": "deep", "why": "手元だけ"},
-                                         {"id": "zz", "use": "deep", "why": "無い単位"}],
-                               "order": ["m4 から始める"], "forms": ["m3 はコード"],
-                               "research": ["exiftool の -d の書式", "x" * 80]})
-        if "直す点" in prompt:
-            return f"<article>{GOOD_DRAFT}</article>"
-        if "一緒に決めた設計" in prompt:
-            return f"<article>{draft_text}</article>"
-        if "ウェブ検索" in prompt:
-            return "<article># 写真の名前\n\nEXIF の DateTimeOriginal を exiftool で読みます。</article>"
-        if '{"items"' in prompt:
-            return '{"items": []}'
-        raise AssertionError(prompt[:200])
-
-    return FakeProvider(respond)
 
 
 @pytest.fixture
@@ -325,7 +248,6 @@ def test_noise_keeps_other_uses(wd):
     d = d.model_copy(update={"skip": [], "aside": [],
                              "units": [u.model_copy(update={"use": "deep"}) if u.id == "m10" else u for u in d.units]})
     wd.save_design(d)
-    from kumimasu.design import noise_workdir
 
     d2 = noise_workdir(wd, p, 3, 2)
     assert d2.use_of("m10") == "deep" and [a.id for a in d2.aside] == ["m7"] and d2.avoid == d.avoid
@@ -348,8 +270,6 @@ def test_check_skip_and_aside_relations(wd):
 
 
 def test_surface_rules_and_trace_exclusion():
-    from kumimasu.surface import detect_surface
-
     md = ("# 題\n\nこの記事では写真の話を見ていきます。Binary Eye は読み取ると GET を送ります。"
           "これにより、手で入力する必要がなくなります。これにより、スキャナーとサーバーの結合が弱くなります。\n")
     fake = FakeProvider(surface_fake)
@@ -367,9 +287,6 @@ def _votes_provider(picks: dict[int, list[str]]):
 
 
 def test_surface_majority_runs_are_independent_and_cached(tmp_path):
-    from kumimasu.llm import CachedProvider
-    from kumimasu.surface import detect_surface
-
     md = "# 題\n\n一つ目の文です。二つ目の文です。三つ目の文です。\n"
     inner = FakeProvider(_votes_provider({1: ["M1", "M2"], 2: ["M1", "M3"], 3: ["M1", "M2"]}))
     cached = CachedProvider(inner, tmp_path / "cache")
@@ -383,8 +300,6 @@ def test_surface_majority_runs_are_independent_and_cached(tmp_path):
 
 
 def test_surface_early_stop_when_two_runs_agree():
-    from kumimasu.surface import detect_surface
-
     p = FakeProvider(_votes_provider({1: ["M2"], 2: ["M2"], 3: ["M1"]}))
     rep = detect_surface("# 題\n\n一つ目の文です。二つ目の文です。\n", p, [], 3, 2)
     assert rep.runs_used == 2 and len(p.calls) == 2 and [h.id for h in rep.hits] == ["M2"]
@@ -461,8 +376,6 @@ def test_blocks_keep_fences_and_neighborhood_adds_heading():
 
 
 def test_default_rules_packaged_and_rules_file(tmp_path):
-    from kumimasu import rules
-
     packaged = [r.text for r in rules.default_rules()]
     assert len(packaged) == 13 and "読者が知っている前提を丁寧に言い直さない。説明は一度だけ、必要な所で" in packaged
     assert any("「まとめ」の節で繰り返さない" in t for t in packaged)
@@ -475,8 +388,6 @@ def test_default_rules_packaged_and_rules_file(tmp_path):
 
 
 def test_off_rules_stay_in_design_but_not_in_prompt(wd):
-    from kumimasu.model import Rule
-
     p = scripted()
     answered(wd, p)
     d = design(wd, p, defaults())
@@ -562,7 +473,6 @@ def test_server_state_answers_and_design(wd):
         code, _ = c.put("/api/design", {"units": {"m1": "deep"}})
         assert code == 409
         design(wd, p, defaults())
-        from kumimasu import ops
 
         ops.set_stage(wd, "design")
         assert c.get("/api/state")[1]["warnings"] == [wd.design().live_conflicts()[0].message()]
@@ -651,12 +561,6 @@ def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):
 
 
 def test_link_checks_refuse_private_addresses_and_are_capped(monkeypatch):
-    import socket
-    import time
-    import urllib.request
-
-    from kumimasu import factcheck
-
     for target in ("127.0.0.1", "10.1.2.3", "169.254.169.254", "::1", "::ffff:127.0.0.1"):
         monkeypatch.setattr(socket, "getaddrinfo", lambda *a, t=target, **k: [
             (socket.AF_INET6 if ":" in t else socket.AF_INET, socket.SOCK_STREAM, 6, "", (t, 80))])
@@ -680,9 +584,6 @@ def test_link_checks_refuse_private_addresses_and_are_capped(monkeypatch):
 
 
 def test_research_gets_no_material_and_the_writer_gets_no_tools(wd, tmp_path, monkeypatch):
-    from kumimasu import ops
-    from kumimasu.research import load_research, research
-
     p = scripted()
     answered(wd, p)
     ops.set_stage(wd, "design")
@@ -711,10 +612,6 @@ def test_research_gets_no_material_and_the_writer_gets_no_tools(wd, tmp_path, mo
 
 
 def test_cli_providers_are_isolated(monkeypatch):
-    import subprocess
-
-    from kumimasu.llm import ClaudeCliProvider, CodexCliProvider
-
     calls = []
 
     def fake_run(cmd, **kw):
@@ -744,12 +641,6 @@ def test_cli_providers_are_isolated(monkeypatch):
 
 
 def test_private_files_and_dirs(tmp_path, monkeypatch):
-    import os
-    import stat
-
-    from kumimasu import ops
-    from kumimasu.llm import CachedProvider
-
     def mode(p):
         return stat.S_IMODE(os.stat(p).st_mode)
 
@@ -774,9 +665,6 @@ def test_private_files_and_dirs(tmp_path, monkeypatch):
 
 
 def test_workdir_root_is_private_and_names_are_checked(tmp_path, monkeypatch):
-    import os
-    import stat
-
     root = Path(os.environ["HOME"]) / ".cache" / "kumimasu" / "work"
     runner = CliRunner()
     res = runner.invoke(app, ["init", str(root / "a"), "--topic", "t", "--audience", "a", "-m", str(SAMPLES / "notes.md")])
@@ -787,7 +675,6 @@ def test_workdir_root_is_private_and_names_are_checked(tmp_path, monkeypatch):
     assert res.exit_code == 1 and "ほかのユーザーも書き込める" in res.output
     root.chmod(0o700)
     w = WorkDir(root / "a")
-    from kumimasu import ops
 
     ops.set_stage(w, "drafting")
     for args in (["check", str(w.root), "--draft", "../../etc/passwd"], ["polish", str(w.root), "--out", "x.md"],
@@ -802,10 +689,6 @@ def test_workdir_root_is_private_and_names_are_checked(tmp_path, monkeypatch):
 
 
 def test_export_never_follows_a_symlink(tmp_path):
-    from datetime import UTC, datetime
-
-    from kumimasu.review import export_final
-
     w, _ = init_workdir(tmp_path / "w", PROJECT, [])
     w.write("draft.final.md", "final\n")
     out = tmp_path / "out"

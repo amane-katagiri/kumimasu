@@ -1,31 +1,44 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 import yaml
-from conftest import serving
+from conftest import VOTES, serving
 from typer.testing import CliRunner
 
-from kumimasu.check import Check, CheckReport, Votes, dash_hits, surface_checks
+from kumimasu import cli_common as cc
+from kumimasu.check import Check, CheckReport, dash_hits, surface_checks
 from kumimasu.cli import app
+from kumimasu.infounits import info_units
 from kumimasu.keep import KeepStore, text_hash
 from kumimasu.llm import FakeProvider
 from kumimasu.model import Project
 from kumimasu.polish import find_flags
 from kumimasu.render import render
 from kumimasu.review import (
+    Item,
+    Review,
     ReviewContext,
+    Rewrite,
     apply_review,
+    base_drafts,
+    base_of,
+    export_final,
+    final_changes,
+    final_name,
+    is_final,
     load_review,
+    mark_flags,
     review_path,
     save_decisions,
 )
 from kumimasu.textutil import apply_edits, locate
 from kumimasu.workdir import WorkDir, init_workdir
 
-VOTES = Votes(3, 2)
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = Project(topic="縦書き", audience="個人サイトを作る人", length=600)
 
@@ -65,8 +78,6 @@ def write_report(wd: WorkDir, rep: CheckReport, name: str = "check.json") -> Non
 
 
 def standard_report(wd: WorkDir) -> CheckReport:
-    from kumimasu.infounits import info_units
-
     last = next(u for u in info_units(DRAFT) if u.text.startswith("最後の段落"))
     rep = report(
         Check(id="meta", relation="r", passed=False, detail="3 回の判定の多数決", runs=3, surface=True,
@@ -98,7 +109,6 @@ def test_items_have_offsets_that_match_the_source_and_rendered_spans(wd):
     assert by_kind["drop"].start == by_kind["fabrication"].start and by_kind["drop"].unit["id"] == "m2"
     assert by_kind["meta"].votes == "3/3" and by_kind["glue"].votes == "2/3" and "道しるべ" in by_kind["meta"].reason
     html, _ = render(DRAFT)
-    import re
 
     starts = sorted(int(m[1]) for m in re.finditer(r'data-s="(\d+)"', html))
     for it in rev.items:
@@ -236,8 +246,6 @@ def test_server_refuses_symlinked_drafts(wd, tmp_path):
 
 
 def test_cli_apply(wd, monkeypatch):
-    from kumimasu import cli_common as cc
-
     standard_report(wd)
     glue = next(i for i in load_review(wd, "draft.md").items if i.kind == "glue")
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
@@ -249,8 +257,6 @@ def test_cli_apply(wd, monkeypatch):
 
 
 def test_base_drafts_and_finals(wd):
-    from kumimasu.review import base_drafts, base_of, final_name, is_final
-
     for n in ("draft.final.md", "draft.final.final.md", "draft.v2.md", "draft.v2.prompt.md", "draft.C.polished.md",
               "draft.C.polished.final.md", "draftfinal.md"):
         wd.write(n, "x\n")
@@ -260,8 +266,6 @@ def test_base_drafts_and_finals(wd):
 
 
 def test_apply_and_export_reject_finals(wd, tmp_path):
-    from kumimasu.review import export_final
-
     wd.write("draft.final.md", DRAFT)
     with pytest.raises(ValueError, match="元の下書き draft.md"):
         apply_review(wd, "draft.final.md", None)
@@ -272,10 +276,6 @@ def test_apply_and_export_reject_finals(wd, tmp_path):
 
 
 def test_export_naming_never_overwrites(wd, tmp_path):
-    from datetime import UTC, datetime
-
-    from kumimasu.review import export_final
-
     with pytest.raises(ValueError):
         export_final(wd, "draft.md", tmp_path / "out")
     wd.write("draft.final.md", "final text\n")
@@ -299,8 +299,6 @@ def _two_rewrites(wd):
 
 def _echo_provider(tag: str):
     def respond(prompt: str) -> str:
-        import re
-
         ids = re.findall(r"^## 項目 (\S+)$", prompt, re.MULTILINE)
         return json.dumps({"items": [{"id": i, "replacement": f"{tag}{n}。"} for n, i in enumerate(ids)]})
     return FakeProvider(respond)
@@ -352,8 +350,6 @@ def test_regenerate_user_edit_note_hint_and_stale(wd):
 
 
 def test_cli_apply_regenerate(wd, monkeypatch):
-    from kumimasu import cli_common as cc
-
     _, glue = _two_rewrites(wd)
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
     p = _echo_provider("x")
@@ -381,7 +377,6 @@ def test_rewrite_reanchors_when_the_sentence_moved(wd):
     twice = moved + "\nこれにより、読みやすくなります。\n"
     wd.write("draft.md", twice)
     write_report(wd, standard_report(wd))
-    from kumimasu.review import Item, Rewrite, mark_flags
 
     x = Item(id="x", kind="glue", start=0, end=3, text="t",
              rewrite=Rewrite(result="r", made_from="これにより、読みやすくなります。"))
@@ -393,8 +388,6 @@ def test_rewrite_reanchors_when_the_sentence_moved(wd):
 
 
 def test_final_changes_locates_rewrites_and_deletions():
-    from kumimasu.review import Item, Review, Rewrite, final_changes
-
     base = "前置きの文です。消す文です。残る文です。直す文です。"
     final = "前置きの文です。残る文です。直した文です。"
     rev = Review(draft="draft.md", items=[

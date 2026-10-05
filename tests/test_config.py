@@ -6,8 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import always_ask, defaults
-from test_steps import PROJECT, SAMPLES, scripted
+from conftest import PROJECT, SAMPLES, always_ask, defaults, scripted
 from typer.testing import CliRunner
 
 from kumimasu import cli_common as cc
@@ -16,6 +15,7 @@ from kumimasu.cli import app
 from kumimasu.config import ConfigError, init_template, load
 from kumimasu.design import design
 from kumimasu.interview import interview
+from kumimasu.llm import FakeProvider
 from kumimasu.mark import mark
 from kumimasu.model import Project
 from kumimasu.workdir import init_workdir
@@ -125,7 +125,7 @@ def test_cli_override_and_config_command(places, monkeypatch):
     write(cwd / "kumimasu.yaml", {"providers": {"interviewer": "fake:from-project"}, "cache_dir": "c"})
     seen = []
     monkeypatch.setattr(cc, "provider", lambda spec, web=False, **kw: seen.append((spec, kw.get("cache_dir"))) or
-                        __import__("kumimasu.llm", fromlist=["FakeProvider"]).FakeProvider(lambda p: '{"questions": []}'))
+                        FakeProvider(lambda p: '{"questions": []}'))
     r = CliRunner()
     assert r.invoke(app, ["interview", str(wdir)]).exit_code == 0
     assert r.invoke(app, ["--trust-project", "interview", str(wdir), "--overwrite"]).exit_code == 0

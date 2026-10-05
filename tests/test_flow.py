@@ -1,25 +1,36 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import time
 
 import pytest
 import yaml
-from conftest import always_ask, defaults, roles, serving
-from test_steps import PROJECT, SAMPLES, scripted
+from conftest import (
+    PROJECT,
+    SAMPLES,
+    always_ask,
+    defaults,
+    roles,
+    run_cli,
+    scripted,
+    serving,
+)
 from typer.testing import CliRunner
 
 from kumimasu import auto as stand_in
 from kumimasu import cli_common as cc
 from kumimasu import ops
+from kumimasu.check import Check, CheckReport
 from kumimasu.cli import app
 from kumimasu.design import design
 from kumimasu.draft import draft
 from kumimasu.interview import interview
 from kumimasu.llm import FakeProvider
 from kumimasu.mark import mark
+from kumimasu.review import load_review
 from kumimasu.workdir import WorkDir, init_workdir
 
 
@@ -48,12 +59,6 @@ def to_review(w: WorkDir, p=None) -> None:
 @pytest.fixture
 def wd(tmp_path) -> WorkDir:
     return make_wd(tmp_path / "w")
-
-
-def run_cli(*args, code: int = 0) -> str:
-    res = CliRunner().invoke(app, [*map(str, args)])
-    assert res.exit_code == code, res.output
-    return res.output
 
 
 def test_stage_guards_in_ops_cli_and_confirm(wd):
@@ -100,7 +105,6 @@ def test_decisions_parity_and_provenance(tmp_path):
     a = make_wd(tmp_path / "a")
     to_review(a)
     run_cli("check", a.root, "--meta-detector", "rules", code=1)
-    from kumimasu.check import Check, CheckReport
 
     rep = CheckReport(draft="draft.md", chars=0, checks=[Check(
         id="meta", relation="r", passed=False, surface=True, detail="3 回の判定の多数決", runs=3,
@@ -109,7 +113,6 @@ def test_decisions_parity_and_provenance(tmp_path):
     b_root = tmp_path / "b"
     shutil.copytree(a.root, b_root)
     b = WorkDir(b_root)
-    from kumimasu.review import load_review
 
     item = load_review(a, "draft.md").items[0].id
     ops.decide(a, "draft.md", {"items": [{"id": item, "decision": "rewrite", "note": "短く"}]}, "human-ui")
@@ -181,8 +184,6 @@ def test_auto_interview_answers_only_selection_questions(wd):
 
 def test_auto_review_never_rewrites_and_keeps_material_sentences(wd, monkeypatch):
     to_review(wd)
-    from kumimasu.check import Check, CheckReport
-    from kumimasu.review import load_review
 
     traced = "試したら、スマホの写真 312 枚のうち 9 枚に撮影日時がありませんでした。"
     rep = CheckReport(draft="draft.md", chars=0, checks=[
@@ -198,7 +199,7 @@ def test_auto_review_never_rewrites_and_keeps_material_sentences(wd, monkeypatch
         asked.append(prompt)
         return json.dumps({"items": [{"id": i, "decision": "rewrite", "reason": "x"} if n == 0 else
                                      {"id": i, "decision": "delete", "reason": "x"}
-                                     for n, i in enumerate(__import__("re").findall(r"^\[([\w-]+)\]", prompt, __import__("re").M))]})
+                                     for n, i in enumerate(re.findall(r"^\[([\w-]+)\]", prompt, re.MULTILINE))]})
 
     h = stand_in.auto_review(wd, FakeProvider(respond))
     items = load_review(wd, "draft.md").items
