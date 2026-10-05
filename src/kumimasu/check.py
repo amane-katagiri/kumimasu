@@ -24,6 +24,7 @@ from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
 from .surface import (
     CAVEAT,
+    FLOW,
     GLUE,
     SurfaceHit,
     SurfaceReport,
@@ -51,7 +52,7 @@ FIRSTHAND_MIN = 0.8
 LINT_RULES = ("bold-lead-item", "emoji", "decor-symbol", "bold-density")
 
 
-SURFACE = ("meta", "caveat", "glue", "lint")
+SURFACE = ("meta", "caveat", "glue", "flow", "lint")
 
 
 class Check(BaseModel):
@@ -474,7 +475,8 @@ def surface_hits(draft: str, units: list[Unit], meta: Provider | None, votes: Vo
 def surface_checks(draft: str, units: list[Unit], meta: Provider | None, votes: Votes, keep: set[str]) -> list[Check]:
     sr = surface_hits(draft, units, meta, votes)
     kept = [h for h in sr.hits if text_hash(h.text) in keep]
-    meta_hits = [h for h in sr.hits if h.category not in (GLUE, CAVEAT) and h not in kept]
+    meta_hits = [h for h in sr.hits if h.category not in (GLUE, CAVEAT, *FLOW) and h not in kept]
+    flow_hits = [h for h in sr.hits if h.category in FLOW and h not in kept]
     caveat_hits = [h for h in sr.hits if h.category == CAVEAT and h not in kept]
     glue_hits = [h for h in sr.hits if h.category == GLUE and h not in kept]
     runs = sr.runs_used or None
@@ -486,7 +488,10 @@ def surface_checks(draft: str, units: list[Unit], meta: Provider | None, votes: 
               [{"id": h.id, "text": h.text, "votes": h.votes} for h in caveat_hits], runs),
            _c("glue", "材料の事実を運ばない、話題を読者の役立ちに結びつけるだけの文 → 無い", not glue_hits, len(glue_hits),
               f"{how}。材料の文をほぼ繰り返すので除いた文 {len(sr.traced)}",
-              [{"id": h.id, "text": h.text, "votes": h.votes} for h in glue_hits], runs)]
+              [{"id": h.id, "text": h.text, "votes": h.votes} for h in glue_hits], runs),
+           _c("flow", "段落の頭で前の段落を受けて理由づけするだけの部分と、段落を解釈で結ぶだけの文 → 無い", not flow_hits,
+              len(flow_hits), how, [{"id": h.id, "category": h.category, "text": h.text, "votes": h.votes} for h in flow_hits],
+              runs)]
     lf = [{"rule": f.rule, "text": f.excerpt} for f in parts_lint(parse_parts(draft)) if f.rule in LINT_RULES]
     lf += [{"rule": "dash", "text": s} for s in dash_hits(draft) if text_hash(s) not in keep]
     out.append(_c("lint", "太字で始まる箇条書き・ダッシュ・絵文字・飾り記号・太字の多用 → 無い", not lf, len(lf), "", lf))

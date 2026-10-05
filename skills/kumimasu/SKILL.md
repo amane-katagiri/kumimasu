@@ -104,7 +104,7 @@ kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）
 kumimasu draft DIR         # 調べることがあれば providers.researcher 1 回（ウェブ調査）→ providers.writer 1 回（ツールなし）
 kumimasu check DIR         # providers.judge 3 回（網羅・割り戻し・読者の目と形）＋ providers.detector 2–3 回（surface.runs）
 kumimasu revise DIR        # 構造の検査が落ちたときだけ（writer 1 回＋検査、ツールなし）。結果は draft.v2.md
-kumimasu polish DIR [--yes]  # 任意: メタ言説・保守的な但し書き・つなぎの効用文・ダッシュの文だけを多数決で見つけ、--yes でその文だけ直す
+kumimasu polish DIR [--yes]  # 任意: メタ言説・保守的な但し書き・つなぎの効用文・段落の運び（頭の理由づけ・末尾の結び）・ダッシュの文だけを多数決で見つけ、--yes でその文だけ直す
 kumimasu confirm DIR --agent [--draft draft.v2.md]
 ```
 
@@ -118,7 +118,7 @@ kumimasu confirm DIR --agent [--draft draft.v2.md]
 
 ## 5. 最終チェック（人）
 
-画面で、または `show DIR` の項目をチャットで一つずつ見せて決めてもらう。`[reader/用語|数字|飛躍]`（画面では「読者に不明」）は、書き直しの後も読者に分からないと判定された所。理由と直し方を伝え、残すか書き直すかを本人に決めてもらう。`[form/密度|図]`（「形の提案」）は、表・リストへの組み替えや図の目印の提案。`[caveat]`（「保守的な但し書き」）は、結論の読み方を変えないと判定された断りで、ふつうは削る候補だが、読み方を変えると本人が言えば残す。`図の目印（情報…）` の行は決めるものではなく、後で図にする所の一覧。
+画面で、または `show DIR` の項目をチャットで一つずつ見せて決めてもらう。`[reader/用語|数字|飛躍]`（画面では「読者に不明」）は、書き直しの後も読者に分からないと判定された所。理由と直し方を伝え、残すか書き直すかを本人に決めてもらう。`[form/密度|図]`（「形の提案」）は、表・リストへの組み替えや図の目印の提案。`[caveat]`（「保守的な但し書き」）は、結論の読み方を変えないと判定された断りで、ふつうは削る候補だが、読み方を変えると本人が言えば残す。`[flow/bridge|wrapup]`（「段落の運び」）は、段落の頭で前の段落を受けて理由づけするだけの部分と、段落を解釈で結ぶだけの文。bridge は文の一部なので、ふつうは「書き直す」でその部分だけ外す。`図の目印（情報…）` の行は決めるものではなく、後で図にする所の一覧。
 
 ```
 kumimasu decide DIR ITEM keep|delete|rewrite|none [--note "…"] [--result "自分の書き直し"] [--regenerate]

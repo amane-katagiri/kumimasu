@@ -47,6 +47,7 @@ from kumimasu.llm import (
     get_provider,
 )
 from kumimasu.mark import mark
+from kumimasu.metadiscourse import split_sentences
 from kumimasu.model import Design, Rule, UnitUse
 from kumimasu.polish import POLISH_RULES, Flag, apply_replacements, neighborhood, polish
 from kumimasu.research import load_research, research
@@ -54,7 +55,7 @@ from kumimasu.review import export_final
 from kumimasu.revise import instructions, revise
 from kumimasu.show import snapshot
 from kumimasu.show import text as show_text
-from kumimasu.surface import detect_surface
+from kumimasu.surface import detect_surface, rule_hints, surface_prompt
 from kumimasu.textutil import blocks
 from kumimasu.workdir import WorkDir, init_workdir
 
@@ -281,6 +282,52 @@ def test_surface_rules_and_trace_exclusion():
     assert [(h.category, h.votes) for h in rep.hits] == [("signpost", 2), ("glue", 2)]
     assert len(rep.traced) == 1 and "結合" in rep.traced[0].text and rep.runs_used == 2 and len(fake.calls) == 2
     assert "（判定 1）" in fake.calls[0]["prompt"] and "glue:" in fake.calls[0]["prompt"]
+
+
+FLOW_DOC = ("# 題\n\n## 一\n\nそこで、冗長さを探しました。今の生成器では起きていませんでした。\n\n"
+            "冗長さが見つからなくても、AI の記事は AI っぽく読めます。節の長さがそろっています。"
+            "形の違いが大事だと分かりました。\n\n- そこで、項目です。項目の二文目です。\n")
+
+
+def _flow_provider(prompt: str) -> str:
+    if "一覧の文だけを直して" in prompt:
+        ids = dict(re.findall(r"^\[(F\d+)\]（(\w+)）", prompt, re.MULTILINE))
+        return json.dumps({"items": [{"id": i, "replacement": "AI の記事は AI っぽく読めます。" if c == "bridge" else ""}
+                                     for i, c in ids.items()]})
+    picks = [{"id": i, "category": "bridge"} for i in re.findall(r"^\[(M\d+)\] (?:冗長さ|そこで)", prompt, re.MULTILINE)]
+    picks += [{"id": i, "category": "wrapup"} for i in re.findall(r"^\[(M\d+)\] (?:形の違い|節の長さ)", prompt, re.MULTILINE)]
+    return json.dumps({"items": picks})
+
+
+def test_flow_hits_only_in_their_paragraph_slot(wd):
+    su = split_sentences(FLOW_DOC)
+    assert [u.slot for u in su if u.kind == "sentence"] == ["first", "last", "first", "", "last", "", ""]
+    assert rule_hints(su) == {"M1": "bridge"}
+    rep = detect_surface(FLOW_DOC, FakeProvider(_flow_provider), [], 3, 2)
+    assert [(h.category, h.text) for h in rep.hits] == [
+        ("bridge", "そこで、冗長さを探しました。"),
+        ("bridge", "冗長さが見つからなくても、AI の記事は AI っぽく読めます。"),
+        ("wrapup", "形の違いが大事だと分かりました。")]
+    prompt = surface_prompt(su, rule_hints(su), 1)
+    assert "（段落の頭）" in prompt and "（段落の終わり）" in prompt and "bridge:" in prompt
+    wd.write("f.md", FLOW_DOC)
+    polish(wd, FakeProvider(_flow_provider), "f.md", ("flow",), True, VOTES, 1, "f.polished.md")
+    text = (wd.root / "f.polished.md").read_text(encoding="utf-8")
+    assert "見つからなくても" not in text and "形の違い" not in text and "AI の記事は AI っぽく読めます。節の長さ" in text
+    assert "そこで、項目です。" in text
+    assert polish(wd, FakeProvider(_flow_provider), "f.md", ("glue",), False, VOTES, 1, "x.md").rounds[0].hits == 0
+
+
+def test_flow_wrapup_does_not_peel_a_paragraph(wd):
+    def respond(prompt: str) -> str:
+        if "一覧の文だけを直して" in prompt:
+            return json.dumps({"items": [{"id": i, "replacement": ""} for i in re.findall(r"^\[(F\d+)\]", prompt, re.MULTILINE)]})
+        return json.dumps({"items": [{"id": i, "category": "wrapup"}
+                                     for i in re.findall(r"^\[(M\d+)\] .*（段落の終わり）", prompt, re.MULTILINE)]})
+    wd.write("w.md", "# 題\n\n一文目です。二文目です。三文目です。\n")
+    res = polish(wd, FakeProvider(respond), "w.md", ("flow",), True, VOTES, 3, "w.polished.md")
+    assert [(r.hits, r.edits) for r in res.rounds] == [(1, 1), (0, 0)]
+    assert (wd.root / "w.polished.md").read_text(encoding="utf-8").strip().endswith("一文目です。二文目です。")
 
 
 def _votes_provider(picks: dict[int, list[str]]):

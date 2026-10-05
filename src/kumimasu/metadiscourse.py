@@ -52,6 +52,7 @@ class Sentence(BaseModel):
     section: int
     heading: str = ""
     paragraph_end: bool = False
+    slot: str = ""
     section_end: bool = False
     leads_into: str = ""
 
@@ -87,10 +88,12 @@ def split_sentences(markdown: str) -> list[Sentence]:
     def flush(at: int) -> None:
         sents = sentences("\n".join(block))
         following = "" if in_list else _next_block(raw, at)
+        prose = not in_list and len(sents) >= 2
         for i, s in enumerate(sents):
             last = i == len(sents) - 1
+            slot = ("first" if i == 0 else "last" if last else "") if prose else ""
             out.append(Sentence(id=f"M{next(n_sent)}", kind="sentence", text=s,
-                                section=section, heading=heading, paragraph_end=last,
+                                section=section, heading=heading, paragraph_end=last, slot=slot,
                                 leads_into=following if last else ""))
 
     for at, ln in enumerate(lines):

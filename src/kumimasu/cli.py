@@ -286,7 +286,7 @@ def revise(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
 def polish(path: DirArg, draft_name: DraftOpt = None,
            provider: Annotated[str | None, typer.Option("--provider", help="Default: config providers.detector")] = None,
            yes: Annotated[bool, typer.Option("--yes", help="Apply: delete or rewrite only the flagged sentences")] = False,
-           rules: Annotated[str, typer.Option("--rules", help="Comma-separated: meta, caveat, glue, dash")] = "meta,caveat,glue,dash",
+           rules: Annotated[str, typer.Option("--rules", help="Comma-separated: meta, caveat, glue, flow, dash")] = "meta,caveat,glue,flow,dash",
            runs: Annotated[int | None, typer.Option("--runs", min=1, help="Detection runs per round (default: config)")] = None,
            min_votes: Annotated[int | None, typer.Option("--min-votes", min=1, help="Runs that must pick a sentence "
                                                          "(default: config)")] = None,

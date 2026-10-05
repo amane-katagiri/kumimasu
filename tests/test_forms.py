@@ -132,3 +132,22 @@ def test_conservative_caveats_are_detected_reviewed_and_polished(tmp_path):
     flags, _ = find_flags(FIG_DRAFT, FIG_DRAFT, p, [], ("caveat",), VOTES, set())
     assert [(f.rule, f.text) for f in flags] == [("caveat", CAVEAT)]
     assert find_flags(FIG_DRAFT, FIG_DRAFT, p, [], ("meta",), VOTES, set())[0] == []
+
+
+BRIDGE = "そこで、コマンド一つにまとめました。"
+
+
+def test_flow_bridge_is_checked_and_reviewed(tmp_path):
+    text = GOOD_DRAFT.replace("`exiftool -d", f"{BRIDGE}`exiftool -d")
+    p = scripted(draft_text=text)
+    w = designed(tmp_path / "w", p)
+    ops.confirm(w, "agent-chat")
+    draft(w, p, roles())
+    rep = check(w, p, p, "draft.md", VOTES)
+    flow = next(c for c in rep.checks if c.id == "flow")
+    assert flow.surface and flow.passed is False and flow.items[0]["category"] == "bridge" and flow.items[0]["text"] == BRIDGE
+    assert all(i.get("category") != "bridge" for i in next(c for c in rep.checks if c.id == "meta").items)
+    item = next(i for i in load_review(w, "draft.md").items if i.kind == "flow")
+    assert item.start is not None and item.category == "bridge" and "理由づけ" in item.reason
+    flags, _ = find_flags(text, text, p, [], ("flow",), VOTES, set())
+    assert [(f.rule, f.text) for f in flags] == [("bridge", BRIDGE)]

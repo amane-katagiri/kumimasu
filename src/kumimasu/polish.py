@@ -9,7 +9,8 @@ from .check import Votes, dash_hits
 from .generate import DATA_NOTE_JA
 from .keep import KeepStore, text_hash
 from .llm import CountingProvider, ask_replacements
-from .surface import CAVEAT, GLUE, detect_surface
+from .metadiscourse import split_sentences
+from .surface import BRIDGE, CAVEAT, FLOW, GLUE, SLOT, WRAPUP, detect_surface
 from .textutil import blocks, collapse_blank_lines, edit_text, locate, norm
 from .workdir import WorkDir
 
@@ -23,7 +24,7 @@ class Flag(BaseModel):
     text: str
 
 
-POLISH_RULES = ("meta", "caveat", "glue", "dash")
+POLISH_RULES = ("meta", "caveat", "glue", "flow", "dash")
 
 
 POLISH_PROMPT_JA = DATA_NOTE_JA + """
@@ -35,6 +36,8 @@ POLISH_PROMPT_JA = DATA_NOTE_JA + """
 - 保守的な但し書き（caveat）は、結果の読み方を変えない限界・未確認の断りです。replacement を空文字にして消します。結果の読み方を変える条件（効く範囲・前提・比べた条件）を含むなら、その条件だけを残した文に書き換えます。
 - 主張の見出し（claim_heading）は、内容を指す短い名詞句に書き換えます。
 - つなぎの効用文（glue）は、話題を読者の役立ちや結果に結びつけるだけの文です。replacement を空文字にして消します。前に書いていない事実を含むなら、その事実だけを残した文に書き換えます。
+- 段落の頭の理由づけ（{bridge}）は、前の段落の結果を言い直して次の話の理由に結びつける部分です。その部分（「そこで、」などの接続の語も含む）だけを消し、残りを段落の頭として読める文に書き換えます。文全体が結びつけだけなら、replacement を空文字にして消します。
+- 段落の結び（{wrapup}）は、段落で述べたことを解釈・教訓として言い直して結ぶだけの文です。replacement を空文字にして消します。段落の中にまだ書いていない事実や著者の判断を含むなら、それだけを残した文に書き換えます。
 - ダッシュ（dash）を含む文は、ダッシュを使わない文に書き換えます。意味は変えません。
 - 前後の文とつながるように、言い回しは最小限だけ変えます。
 
@@ -50,7 +53,7 @@ POLISH_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def polish_prompt(draft: str, flags: list[Flag]) -> str:
-    return POLISH_PROMPT_JA.format(flags="\n".join(f"[{f.id}]（{f.rule}）{f.text}" for f in flags), draft=draft.strip())
+    return POLISH_PROMPT_JA.format(bridge=BRIDGE, wrapup=WRAPUP, flags="\n".join(f"[{f.id}]（{f.rule}）{f.text}" for f in flags), draft=draft.strip())
 
 
 def apply_replacements(draft: str, flags: list[Flag], repl: dict[str, str]) -> tuple[str, list[dict], list[int]]:
@@ -120,15 +123,25 @@ class PolishResult(BaseModel):
     llm_calls: int = 0
 
 
+def rule_of(category: str) -> str:
+    return category if category in (GLUE, CAVEAT) else "flow" if category in FLOW else "meta"
+
+
+def original_slots(text: str) -> dict[str, str]:
+    return {norm(u.text): u.slot for u in split_sentences(text) if u.slot}
+
+
 def find_flags(scope: str, full: str, provider: Provider, material: list[str], rules: tuple[str, ...], votes: Votes,
-               keep: set[str]) -> tuple[list[Flag], int]:
+               keep: set[str], slots: dict[str, str] | None = None) -> tuple[list[Flag], int]:
     found: list[tuple[str, str]] = []
     used = 0
-    if {"meta", CAVEAT, GLUE} & set(rules):
+    if {"meta", CAVEAT, GLUE, "flow"} & set(rules):
         rep = detect_surface(scope, provider, material, votes.runs, votes.min_votes)
         used = rep.runs_used
-        found += [(h.category, h.text) for h in rep.hits
-                  if (h.category if h.category in (GLUE, CAVEAT) else "meta") in rules]
+        # A deleted wrap-up makes the sentence before it the paragraph's last, so later rounds would peel the paragraph
+        # sentence by sentence; only sentences that held the slot in the original draft count.
+        found += [(h.category, h.text) for h in rep.hits if rule_of(h.category) in rules
+                  and (h.category not in FLOW or slots is None or slots.get(norm(h.text)) == SLOT[h.category])]
     if "dash" in rules:
         found += [("dash", s) for s in dash_hits(scope)]
     out, seen = [], set()
@@ -146,11 +159,12 @@ def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, .
     material = [u.text for u in wd.units()]
     keep = KeepStore(wd).hashes()
     text = wd.read(draft_name)
+    slots = original_slots(text)
     scope = text
     res = PolishResult()
     for r in range(1, max_rounds + 1):
         before = counter.calls
-        flags, used = find_flags(scope, text, counter, material, rules, votes, keep)
+        flags, used = find_flags(scope, text, counter, material, rules, votes, keep, slots)
         rd = Round(round=r, scope_chars=len(scope), runs=used, hits=len(flags), flags=flags)
         res.rounds.append(rd)
         if not flags or not apply:

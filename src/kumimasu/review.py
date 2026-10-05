@@ -38,7 +38,7 @@ Decision = Literal["", "keep", "delete", "rewrite"]
 DECISION_LABEL = {"": "未決", "keep": "残す", "delete": "削る", "rewrite": "書き直す"}
 ITEM_KIND_LABEL = {"meta": "メタ言説", "glue": "つなぎの効用文", "lint": "表記", "drop": "書かないはずの事柄",
                    "fabrication": "材料に無い体験", "number": "出典の無い数値", "link": "開けないリンク",
-                   "reader": "読者に不明", "form": "形の提案", "caveat": "保守的な但し書き",
+                   "reader": "読者に不明", "form": "形の提案", "caveat": "保守的な但し書き", "flow": "段落の運び",
                    "user": "自分で足した項目"}
 
 
@@ -103,6 +103,9 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
                     case "glue":
                         add("glue", "glue", it["text"], locate(src, it["text"]),
                             votes=f"{it.get('votes', '')}/{n}" if n else "", reason=SURFACE_CATEGORIES["glue"])
+                    case "flow":
+                        add("flow", it["category"], it["text"], locate(src, it["text"]),
+                            votes=f"{it.get('votes', '')}/{n}" if n else "", reason=SURFACE_CATEGORIES[it["category"]])
                     case "lint":
                         if it["rule"] == "dash" and norm(it["text"]) not in dashes:
                             continue
@@ -166,7 +169,7 @@ def load_review(wd: WorkDir, draft: str, src: str | None = None) -> Review:
         old = by_id.get(it.id)
         if old:
             it.decision, it.note, it.rewrite, it.source = old.decision, old.note, old.rewrite, old.source
-        elif it.kind in ("meta", "caveat", "glue") and text_hash(it.text) in keep:
+        elif it.kind in ("meta", "caveat", "glue", "flow") and text_hash(it.text) in keep:
             it.decision = "keep"
         items.append(it)
     items += [i for i in saved.items if i.kind == "user" and i.start is not None and i.end is not None]
@@ -271,7 +274,7 @@ def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
 
 
 def update_keep(wd: WorkDir, rev: Review) -> None:
-    KeepStore(wd).update({it.text: it.decision == "keep" for it in rev.items if it.kind in ("meta", "caveat", "glue", "user")})
+    KeepStore(wd).update({it.text: it.decision == "keep" for it in rev.items if it.kind in ("meta", "caveat", "glue", "flow", "user")})
 
 
 REWRITE_PROMPT_JA = DATA_NOTE_JA + """

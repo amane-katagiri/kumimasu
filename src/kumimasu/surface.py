@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 GLUE = "glue"
 CAVEAT = "caveat"
+BRIDGE = "bridge"
+WRAPUP = "wrapup"
+FLOW = (BRIDGE, WRAPUP)
+SLOT = {BRIDGE: "first", WRAPUP: "last"}
+SLOT_LABEL = {"first": "段落の頭", "last": "段落の終わり"}
+BRIDGE_RULE = re.compile(r"^(そこで|ところが|それでも|とはいえ|その結果|このため|そのため)、|(ことから|を受けて|を踏まえて|だけでは)、")
 CAVEAT_RULE = re.compile(r"標本が(少な|小さ)|探索的|未確認|未検証|検証していな|確かめていな|一般化(でき|は難し|には注意)|"
                          r"(単一|一人|1 人)の(読み手|著者|評価者)|あくまで[^。]{0,20}(結果|傾向)|可能性があります|可能性は否定でき|"
                          r"注意が必要です|留意してください|限界があります")
@@ -27,6 +33,12 @@ SURFACE_CATEGORIES: dict[str, str] = CATEGORIES | {
     GLUE: "つなぎの効用文。直前・直後の話題を、読者にとっての役立ち・利点・結果に結びつけることだけが役目で、"
           "新しい事実・条件・手順・数値・理由を運ばない文（「これにより、手作業の入力が不要になります。」"
           "「この構成にしておくと、あとで差し替えるときに安心です。」「つまり、Binary Eye がスキャナーの役を果たすということです。」）",
+    BRIDGE: "段落の頭の理由づけ。「（段落の頭）」の付いた文で、前の段落や節で述べた結果・状況を言い直し、次に何をしたか・何を書くかの理由や"
+            "きっかけに結びつける部分（「冗長さが見つからなくても、〜」「好まれたのが具体的な場面だったことから、〜ことにしました」"
+            "「そこで、〜」）。結びつけの部分を消しても、段落の残りが前の段落の後にそのまま読めるもの。文の一部だけでも選ぶ",
+    WRAPUP: "段落の結び。「（段落の終わり）」の付いた文で、その段落で述べた事実や数値を解釈・意義・教訓として言い直して結ぶだけの文"
+            "（「今の LLM の性能が十分に高いことを、この結果で実感しました。」「局所的な形の量にも U 字がありました。」）。"
+            "段落の中にまだ書いていない事実・数値・条件・著者の判断を運ぶ文は選ばない",
 }
 
 class Pick(BaseModel):
@@ -63,7 +75,8 @@ def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int) -> st
             lines.append(f"=== 節: {u.heading or '（冒頭）'}")
         tag = f"  ← 規則: {hints[u.id]}" if u.id in hints else ""
         lead = f"  （直後に{LEADS[u.leads_into]}）" if u.leads_into else ""
-        lines.append(f"[{u.id}] {'見出し: ' if u.kind == 'heading' else ''}{u.text}{lead}{tag}")
+        slot = f"  （{SLOT_LABEL[u.slot]}）" if u.slot else ""
+        lines.append(f"[{u.id}] {'見出し: ' if u.kind == 'heading' else ''}{u.text}{slot}{lead}{tag}")
     cats = "\n".join(f"- {k}: {v}" for k, v in SURFACE_CATEGORIES.items())
     return (
         DATA_NOTE_JA + "\n\n次は技術ブログ記事（またはその一部）を文に分けたものです。[M12] は文の番号、[H3] は見出しの番号です。"
@@ -71,7 +84,7 @@ def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int) -> st
         "当たっていても該当しないことは多く、当たっていない文が該当することもあります。\n\n"
         "情報を運ばない文と見出しを選び、型を付けてください。目安は「消しても（見出しなら名詞句に直しても）読み手が失う情報が無い」ことです。"
         "事実・条件・手順・具体例・理由・数値・著者の体験や感想を述べている文は、言い回しが下の型に似ていても選ばないでください。"
-        "文の一部だけが型にあたり、残りが情報を運んでいる場合も選ばないでください。"
+        "文の一部だけが型にあたり、残りが情報を運んでいる場合も選ばないでください（段落の頭の理由づけ（bridge）だけは、文の一部でも選びます）。"
         "保守的な但し書き（caveat）は、条件を述べていても選んで構いません。ただし、その文を消すと読者が結果を読み違える"
         "（効く範囲・前提・比べた条件が変わる）なら選ばないでください。迷ったら選びません。"
         "「（直後に箇条書き）」などの付いた文が、すぐ後の箇条書き・表・コードを導入しているだけなら選ばないでください。\n\n"
@@ -95,6 +108,8 @@ def parse_picks(data: dict, by_id: dict[str, Sentence]) -> list[Pick]:
             continue
         if (by_id[uid].kind == "heading") != (cat == "claim_heading"):
             continue
+        if cat in SLOT and by_id[uid].slot != SLOT[cat]:
+            continue
         seen.add(uid)
         out.append(Pick(id=uid, category=cat))
     return out
@@ -107,6 +122,8 @@ def rule_hints(units: list[Sentence]) -> dict[str, str]:
             hints[u.id] = GLUE
         elif u.kind == "sentence" and u.id not in hints and CAVEAT_RULE.search(u.text):
             hints[u.id] = CAVEAT
+        elif u.slot == SLOT[BRIDGE] and u.id not in hints and BRIDGE_RULE.search(u.text):
+            hints[u.id] = BRIDGE
     return hints
 
 
@@ -138,5 +155,5 @@ def detect_surface(markdown: str, provider: Provider, material: list[str], runs:
         if votes[u.id] >= need:
             cat = cats[u.id].most_common(1)[0][0]
             h = SurfaceHit(id=u.id, category=cat, text=u.text, heading=u.heading, votes=votes[u.id])
-            (traced if cat == GLUE and grams and traceable(u.text, grams) else hits).append(h)
+            (traced if cat in (GLUE, WRAPUP) and grams and traceable(u.text, grams) else hits).append(h)
     return SurfaceReport(units=len(units), runs=results, rule=sorted(hints), hits=hits, traced=traced, union=len(votes))
