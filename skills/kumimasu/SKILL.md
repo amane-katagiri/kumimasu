@@ -14,7 +14,7 @@ description: 著者の選んでいない材料（メモ・ログ・コード・�
 1. `kumimasu --help` が通るか確かめる。コマンドが無ければ、本人に断ってから入れる。
 
    ```
-   uv tool install git+https://github.com/vividoyomogimochi/kumimasu
+   uv tool install git+https://github.com/amane-katagiri/kumimasu
    ```
 
    `uv` が無いときは、その旨を伝えて入れ方（https://docs.astral.sh/uv/ ）を案内する。勝手に別の方法で入れない。

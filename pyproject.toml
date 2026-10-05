@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/vividoyomogimochi/kumimasu"
+Repository = "https://github.com/amane-katagiri/kumimasu"
 
 [project.scripts]
 kumimasu = "kumimasu.cli:main"

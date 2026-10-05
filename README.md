@@ -28,20 +28,20 @@
 [uv](https://docs.astral.sh/uv/) で入れます（Python 3.12 以上）。
 
 ```sh
-uv tool install git+https://github.com/vividoyomogimochi/kumimasu
+uv tool install git+https://github.com/amane-katagiri/kumimasu
 kumimasu --help
 ```
 
 既定の LLM は [Claude Code](https://claude.com/claude-code) の `claude -p` を呼びます（`claude-cli:opus` / `claude-cli:sonnet`）。API を直接使うときは追加の依存を入れて、設定で `anthropic:<model>` や `openai:<model>` を選びます。
 
 ```sh
-uv tool install "kumimasu[anthropic] @ git+https://github.com/vividoyomogimochi/kumimasu"
+uv tool install "kumimasu[anthropic] @ git+https://github.com/amane-katagiri/kumimasu"
 ```
 
 ### Claude Code のプラグイン
 
 ```
-/plugin marketplace add vividoyomogimochi/kumimasu
+/plugin marketplace add amane-katagiri/kumimasu
 /plugin install kumimasu@kumimasu
 ```
 
