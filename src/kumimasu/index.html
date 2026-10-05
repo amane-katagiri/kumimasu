@@ -7,211 +7,307 @@
 <title>記事の設計</title>
 <style>
 :root {
-  --bg: #f7f5f0; --paper: #fffdf9; --ink: #23262b; --muted: #6f747c; --line: #e3ded4; --soft: #efebe3;
-  --accent: #2f6f8f; --bad: #b42318; --code-bg: #f1eee7;
-  --yes: #9aa0a8; --partial: #c48a1c; --no: #2e7d4f; --answer: #2f6f8f;
-  --deep: #2e7d4f; --mention: #6f747c; --drop: #b42318; --ok: #2b8a3e;
-  --k-meta: #d9822b; --k-glue: #8e5bd0; --k-lint: #7a8088; --k-drop: #c0392b; --k-fabrication: #a5281b;
-  --k-number: #2f6f8f; --k-link: #2f6f8f; --k-user: #2e7d4f;
-  --sans: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  --bg: #f5f4f1; --surface: #fbfbf9; --field: #fdfdfb; --fill: #ebe9e4; --line: #dcd9d2; --line-soft: #e7e5e0;
+  --ink: #2c2c2a; --ink-2: #5d5b56; --ink-3: #85827c;
+  --accent: #46677a; --on-accent: #fbfbf9;
+  --sage: #6b8a6f; --sage-text: #4b6a50; --ochre: #a07b28; --ochre-text: #84651f; --brick: #a5524a; --stone: #a19e97;
+  --no: var(--sage); --partial: var(--ochre); --yes: var(--stone); --answer: var(--accent);
+  --ok: var(--sage); --bad: var(--brick); --code-bg: #efede8;
+  --k-meta: #a8812b; --k-glue: #8a6b9b; --k-lint: #8a8781; --k-drop: #b45a49; --k-fabrication: #8e3c4e;
+  --k-number: #4a7795; --k-link: #3b827c; --k-user: #5f8655;
+  --pop-shadow: 0 10px 30px rgb(40 38 34 / .09);
+  --font: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Noto Sans CJK JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
   --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Menlo", "Consolas", "Noto Sans Mono CJK JP", monospace;
+  --t-s: 12.5px; --t-m: 14.5px; --t-l: 17px; --t-xl: 22px;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --gutter: 40px; --r: 6px; --r-l: 10px;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15171a; --paper: #1b1e22; --ink: #e4e2dd; --muted: #9a9fa6; --line: #2e3238; --soft: #24282d;
-    --accent: #7cb7d4; --bad: #f08a80; --code-bg: #22262b;
-    --yes: #6b7179; --partial: #e0b050; --no: #6cc28f; --answer: #7cb7d4;
-    --deep: #6cc28f; --mention: #9a9fa6; --drop: #f08a80; --ok: #6cc28f;
-    --k-meta: #f0a860; --k-glue: #b896f0; --k-lint: #a3a9b1; --k-drop: #f0857a; --k-fabrication: #f07a6e;
-    --k-number: #7cb7d4; --k-link: #7cb7d4; --k-user: #6cc28f;
+    --bg: #1d1e1c; --surface: #242523; --field: #222321; --fill: #2f302d; --line: #3b3c38; --line-soft: #2f302c;
+    --ink: #e6e3dc; --ink-2: #aeaaa2; --ink-3: #8a867e;
+    --accent: #93b2c4; --on-accent: #1a2125;
+    --sage: #94b396; --sage-text: #a6c3a7; --ochre: #d0ae66; --ochre-text: #d8b977; --brick: #d98f84; --stone: #77746e;
+    --code-bg: #282926;
+    --k-meta: #d4ae5e; --k-glue: #b9a0cb; --k-lint: #a29e96; --k-drop: #e0947f; --k-fabrication: #d98b9c;
+    --k-number: #8fb5cf; --k-link: #7fbfb6; --k-user: #9cbf8e;
+    --pop-shadow: 0 10px 30px rgb(0 0 0 / .35);
   }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.65; }
-button, input, textarea { font: inherit; color: inherit; }
-button { cursor: pointer; }
-header { padding: 16px 24px 10px; border-bottom: 1px solid var(--line); }
-header h1 { font-size: 17px; margin: 0; }
-header .meta { color: var(--muted); font-size: 12.5px; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: var(--t-m); line-height: 1.75;
+  -webkit-font-smoothing: antialiased; min-height: 100vh; display: flex; flex-direction: column; }
 [hidden] { display: none !important; }
-.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 440px); gap: 20px; padding: 16px 24px 80px; max-width: 1400px; margin: 0 auto; }
-h2 { font-size: 14.5px; margin: 0 0 8px; }
-.panel { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
-.side { position: sticky; top: 12px; align-self: start; max-height: calc(100vh - 24px); overflow: auto; }
-.legend, .filters { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
-.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--c); margin-right: 4px; vertical-align: -1px; }
-.filters button { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 1px 10px; font-size: 12px; }
-.filters button.on { background: var(--soft); border-color: var(--muted); }
-.unit { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
-.unit:first-child { border-top: 0; }
-.unit .bar { border-radius: 2px; background: var(--c); }
-.unit .head { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+code { font-family: var(--mono); font-size: .9em; }
+h2 { font-size: var(--t-l); font-weight: 600; margin: 0 0 var(--s3); letter-spacing: .01em; }
+h3 { font-size: var(--t-m); font-weight: 600; margin: var(--s6) 0 var(--s3); color: var(--ink); }
+label, .label { display: block; font-size: var(--t-s); color: var(--ink-2); margin: 0 0 var(--s1); }
+.note, .hint { color: var(--ink-3); font-size: var(--t-s); margin: 0; }
+.hint { margin: -2px 0 var(--s2); line-height: 1.6; }
+textarea, input[type=text], input[type=number], input:not([type]), select {
+  width: 100%; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); padding: 7px 10px; line-height: 1.6; }
+textarea { min-height: 72px; resize: vertical; display: block; }
+textarea:focus, input:focus, select:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+select { width: auto; padding: 4px 8px; }
+
+.btn { border: 1px solid var(--line); background: transparent; border-radius: var(--r); padding: 4px 12px; font-size: var(--t-s); color: var(--ink-2); }
+.btn:hover:not(:disabled) { background: var(--fill); color: var(--ink); }
+.btn.quiet { border-color: transparent; }
+.primary { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: var(--r); padding: 8px 18px;
+  font-size: var(--t-m); font-weight: 600; white-space: nowrap; }
+.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.primary:disabled { background: transparent; color: var(--ink-3); border-color: var(--line); }
+
+.seg { display: inline-flex; background: var(--fill); border-radius: 8px; padding: 2px; gap: 2px; flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; border-radius: 6px; padding: 2px 10px; font-size: var(--t-s); color: var(--ink-2); }
+.seg button:hover { color: var(--ink); }
+.seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.seg button.on[data-use="deep"], .seg button.on[data-d="keep"] { color: var(--sage-text); }
+.seg button.on[data-use="drop"], .seg button.on[data-d="delete"] { color: var(--brick); }
+.seg button.on[data-d="rewrite"] { color: var(--accent); }
+.toggle { border: 0; background: transparent; border-radius: 999px; padding: 1px 10px; font-size: var(--t-s); color: var(--ink-3); }
+.toggle:hover { color: var(--ink); background: var(--fill); }
+.toggle.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: 1px; flex: none; }
+
+header { padding: var(--s6) var(--gutter) 0; }
+header h1 { font-size: var(--t-xl); font-weight: 600; line-height: 1.4; margin: 0; letter-spacing: .01em; }
+.meta { display: flex; flex-wrap: wrap; gap: 2px var(--s4); color: var(--ink-3); font-size: var(--t-s); margin-top: var(--s1); }
+.stages { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 var(--s5); margin-top: var(--s5); border-bottom: 1px solid var(--line); }
+.stages button { border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; padding: var(--s2) 0; font-size: 13.5px; color: var(--ink-2); }
+.stages button .n { color: var(--ink-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.stages button:hover:not(:disabled) { color: var(--ink); }
+.stages button.on { color: var(--ink); border-bottom-color: var(--ink-3); }
+.stages button.cur { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+.stages button:disabled { color: var(--ink-3); opacity: .6; }
+.ro-banner { overflow-wrap: anywhere; margin: 0 var(--gutter); padding: var(--s3) 0; font-size: var(--t-s); color: var(--ink-2); border-bottom: 1px solid var(--line-soft); }
+
+main { flex: 1; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 420px); gap: var(--s7); padding: var(--s6) var(--gutter) var(--s7); max-width: 1440px; margin: 0 auto; }
+.side { position: sticky; top: var(--s4); align-self: start; max-height: calc(100vh - 120px); overflow: auto; padding: 0 var(--s1) var(--s5) 0; }
+.side section + section { margin-top: var(--s7); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); color: var(--ink-2); font-size: var(--t-s); margin-bottom: var(--s4); }
+.legend span { display: inline-flex; align-items: center; }
+.filters { display: flex; flex-wrap: wrap; gap: var(--s1); margin-bottom: var(--s2); }
+.filters button { border: 0; background: transparent; border-radius: 999px; padding: 2px 12px; font-size: var(--t-s); color: var(--ink-2); }
+.filters button:hover { color: var(--ink); }
+.filters button.on { background: var(--fill); color: var(--ink); font-weight: 600; }
+
+.unit { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2) var(--s5); padding: var(--s4) 0; border-top: 1px solid var(--line-soft); }
+.unit .head { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s3); font-size: var(--t-s); color: var(--ink-3); margin-bottom: 2px; }
+.unit .head .id { color: var(--ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.unit .why { color: var(--ink-2); font-size: var(--t-s); }
 .unit .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.unit pre { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border-radius: 6px; padding: 6px 8px; margin: 2px 0 0; overflow-x: auto; white-space: pre; }
+.unit pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; background: var(--code-bg); border-radius: var(--r); padding: var(--s2) var(--s3); margin: var(--s1) 0 0; overflow-x: auto; white-space: pre; }
 .unit.drop .text, .unit.drop pre { opacity: .45; }
-.unit a { color: var(--accent); }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; height: fit-content; }
-.seg button { border: 0; background: transparent; padding: 2px 8px; font-size: 12px; color: var(--muted); }
-.seg button + button { border-left: 1px solid var(--line); }
-.seg button.on[data-use="deep"] { background: var(--deep); color: #fff; }
-.seg button.on[data-use="mention"] { background: var(--mention); color: #fff; }
-.seg button.on[data-use="drop"] { background: var(--drop); color: #fff; }
-.q { margin: 0 0 14px; }
-.q .qt { font-weight: 600; }
-.q .why { color: var(--muted); font-size: 12px; margin: 2px 0 4px; }
-.q .refs { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
-textarea, input[type=number] { width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 6px 8px; }
-textarea { min-height: 64px; resize: vertical; }
-label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
-.note { color: var(--muted); font-size: 12.5px; }
-.warn { margin: 4px 0 0; padding-left: 1.2em; color: var(--partial); font-size: 12.5px; }
-.rule { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
-.rule input[type=text] { flex: 1; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 3px 6px; }
-.rule.off input[type=text] { opacity: .5; text-decoration: line-through; }
-.rule button, .add { border: 1px solid var(--line); background: var(--paper); border-radius: 6px; padding: 1px 8px; color: var(--muted); }
-.tools { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
-.noise { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
-.noise input { flex: 1; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 3px 6px; }
-.seg button.on[data-noise] { background: var(--answer); color: #fff; }
-.counts { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
-#status { position: fixed; right: 16px; bottom: 12px; font-size: 12px; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; }
-#status.err { color: var(--bad); }
-.stages { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.stages button { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 2px 12px; font-size: 12.5px; color: var(--muted); }
-.stages button.cur { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.stages button.on { background: var(--soft); }
-.stages button:disabled { opacity: .45; cursor: default; }
-.stages .sep { color: var(--muted); font-size: 12px; }
-.stages .round { margin-left: 8px; color: var(--muted); font-size: 12px; }
-.ro-banner { padding: 8px 24px; background: var(--soft); border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
-.drafting { max-width: 720px; margin: 32px auto; padding: 0 16px; }
-.confirm-bar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: flex-end; padding: 10px 24px; background: var(--bg); border-top: 1px solid var(--line); z-index: 5; }
-.confirm-bar textarea { flex: 1; min-height: 40px; max-height: 120px; }
-.confirm-bar .primary { background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: 6px; padding: 6px 14px; font-size: 13px; white-space: nowrap; }
-.fc-bar button, .fc-pop button { border: 1px solid var(--line); background: var(--paper); border-radius: 6px; padding: 2px 10px; font-size: 12.5px; }
-.fc-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 12px 24px; border-bottom: 1px solid var(--line); }
-.fc-bar select { font: inherit; color: inherit; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
-.fc-bar .primary { margin-left: auto; background: var(--accent); color: #fff; border-color: var(--accent); }
-.inline { display: inline; margin: 0; font-size: 13px; color: var(--ink); }
-.fc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
-.fc-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.fc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 20px; padding: 16px 24px 40px; max-width: 1400px; margin: 0 auto; }
-.fc-article { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 28px 36px; font-size: 16px; line-height: 1.9; }
-.fc-article > * { max-width: 40em; }
-.fc-article h2 { font-size: 1.25em; border-bottom: 1px solid var(--line); padding-bottom: .2em; margin: 1.6em 0 .6em; }
-.fc-article h3, .fc-article h4 { font-size: 1.08em; margin: 1.4em 0 .5em; }
-.fc-article p { margin: 0 0 1em; }
-.fc-article code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); border-radius: 4px; padding: .05em .3em; }
-.fc-article pre { font-family: var(--mono); font-size: 13px; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
-.fc-article pre code { background: none; padding: 0; }
-.fc-article table { border-collapse: collapse; font-size: .92em; display: block; overflow-x: auto; margin: 0 0 1em; }
-.fc-article th, .fc-article td { border: 1px solid var(--line); padding: .3em .6em; }
-.fc-article a { color: var(--accent); }
-.fc-article .img-ph { display: block; border: 1.5px dashed var(--line); border-radius: 8px; padding: 1em; text-align: center; color: var(--muted); font-size: 13px; }
-mark.fc { background: color-mix(in srgb, var(--c) 26%, transparent); color: inherit; border-bottom: 2px solid var(--c); cursor: pointer; border-radius: 2px; }
-mark.fc.keep { background: transparent; border-bottom-style: dotted; }
-mark.fc.delete { text-decoration: line-through; text-decoration-color: var(--bad); opacity: .65; }
-mark.fc.rewrite { border-bottom-style: dashed; }
-mark.chg { background: color-mix(in srgb, var(--ok) 22%, transparent); border-bottom: 2px solid var(--ok); border-radius: 2px; color: inherit; cursor: help; }
-.chg-del { display: inline-block; font-size: 11px; line-height: 1; padding: 1px 4px; margin: 0 2px; border-radius: 4px; color: var(--bad); border: 1px solid var(--bad); cursor: help; vertical-align: middle; }
-mark.fc.focus { outline: 2px solid var(--c); outline-offset: 1px; }
-.fc-side { position: sticky; top: 12px; align-self: start; max-height: calc(100vh - 24px); overflow: auto; }
-.fc-item { border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 8px; background: var(--paper); padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
-.fc-item .k { font-size: 11.5px; color: var(--muted); }
-.fc-item .t { font-size: 13px; overflow-wrap: anywhere; }
-.fc-item .d { font-size: 12px; margin-top: 2px; font-weight: 600; }
-.fc-item.done { opacity: .75; }
-.fc-pop { position: absolute; z-index: 10; width: min(420px, calc(100vw - 32px)); background: var(--paper); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 10px 12px; font-size: 13px; }
-.fc-pop .k { color: var(--muted); font-size: 12px; }
-.fc-pop .quote { margin: 4px 0; overflow-wrap: anywhere; }
-.fc-pop .reason, .fc-pop .unit { color: var(--muted); font-size: 12px; margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.fc-pop .acts { display: flex; gap: 6px; margin: 8px 0 4px; flex-wrap: wrap; }
-.fc-pop button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-.fc-pop textarea { min-height: 52px; }
-.badge { display: inline-block; font-size: 11px; font-weight: 500; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--muted); }
-.badge.bad { color: var(--bad); border-color: var(--bad); }
-.warn-box { color: var(--bad); font-size: 12px; margin: 6px 0; }
-.fc-used { margin: 0 24px; padding: 6px 0; font-size: 13px; }
-.fc-used summary { cursor: pointer; color: var(--muted); }
-.fc-used h4 { font-size: 12.5px; margin: 10px 0 4px; }
-.fc-used ul { margin: 0; padding-left: 1.4em; }
-.fc-used p { margin: 4px 0; }
-.fc-result { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 24px; border-bottom: 1px solid var(--line); font-size: 13px; }
-.fc-result button, .fc-result a.btn { border: 1px solid var(--line); background: var(--paper); border-radius: 6px; padding: 2px 10px; font-size: 12.5px; color: inherit; text-decoration: none; }
+.tools { display: flex; flex-direction: column; align-items: flex-end; gap: var(--s1); }
+.tools .toggles { display: flex; gap: 2px; }
+
+.q { margin: 0 0 var(--s5); }
+.q .qt { font-weight: 600; margin-bottom: 2px; }
+.q .why { color: var(--ink-2); font-size: var(--t-s); }
+.refs { color: var(--ink-3); font-size: var(--t-s); font-variant-numeric: tabular-nums; }
+.q .refs { margin-bottom: var(--s2); }
+.field { margin-bottom: var(--s4); }
+.counts { display: flex; flex-wrap: wrap; gap: 0 var(--s4); font-size: var(--t-s); color: var(--ink-3); margin-top: var(--s2); font-variant-numeric: tabular-nums; }
+.length { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.length input { width: 120px; }
+.noise { display: flex; gap: var(--s3); align-items: center; margin: var(--s1) 0; }
+.noise input { flex: 1; min-width: 0; padding: 4px 8px; }
+.warn { margin: var(--s2) 0 0; padding-left: 1.2em; color: var(--ochre-text); font-size: var(--t-s); }
+.rule { display: flex; gap: var(--s2); align-items: center; margin: 2px 0; }
+.rule input[type=text] { flex: 1; min-width: 0; padding: 4px 8px; border-color: transparent; background: transparent; }
+.rule input[type=text]:hover { border-color: var(--line); }
+.rule input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.rule.off input[type=text] { color: var(--ink-3); text-decoration: line-through; }
+.rule button { border: 0; background: transparent; color: var(--ink-3); border-radius: var(--r); padding: 0 8px; font-size: 16px; line-height: 1.6; }
+.rule button:hover { color: var(--brick); background: var(--fill); }
+.add { margin-top: var(--s2); }
+#warnings:not(:empty) { margin-bottom: var(--s4); }
+
+#foot { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s5);
+  padding: var(--s3) var(--gutter); background: var(--bg); border-top: 1px solid var(--line); }
+#status { font-size: var(--t-s); color: var(--ink-3); min-width: 8em; }
+#status.err { color: var(--brick); }
+.confirm-bar { flex: 1; display: flex; gap: var(--s3); align-items: center; min-width: 0; }
+.confirm-bar textarea { flex: 1; min-width: 0; min-height: 40px; height: 40px; max-height: 140px; }
+
+.drafting { max-width: 36em; margin: 12vh auto; padding: 0 var(--gutter); }
+.drafting h2 { display: flex; align-items: center; gap: var(--s3); }
+.drafting .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: breathe 2.4s ease-in-out infinite; }
+.drafting p { color: var(--ink-2); }
+@keyframes breathe { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .drafting .pulse { animation: none; } }
+
+.fc-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3) var(--s4); padding: var(--s5) var(--gutter) 0; max-width: 1440px; margin: 0 auto; }
+.fc-bar .inline { display: inline-flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--t-s); color: var(--ink-2); }
+.fc-bar .primary { margin-left: auto; }
+.fc-result { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); padding: var(--s3) var(--gutter) 0; max-width: 1440px; margin: 0 auto; font-size: var(--t-s); color: var(--ink-2); }
+.fc-result .what { margin-right: var(--s3); }
+.fc-result .what b { color: var(--ink); font-weight: 600; }
+.fc-result .result-note { flex-basis: 100%; }
 .fc-result textarea { flex-basis: 100%; min-height: 160px; font-family: var(--mono); font-size: 12px; }
-.fc-diff { border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); padding: 0; width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 64px); }
-.fc-diff::backdrop { background: rgb(0 0 0 / .35); }
-.fc-diff .head { position: sticky; top: 0; background: var(--paper); padding: 12px 16px 8px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
-.fc-diff .head > div { flex: 1; }
-.fc-diff .head h2 { margin: 0 0 4px; font-size: 15px; }
-.fc-diff .body { padding: 10px 16px 16px; overflow: auto; }
-.fc-diff pre { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-.fc-diff .add { background: color-mix(in srgb, var(--ok) 18%, transparent); display: block; }
-.fc-diff .del { background: color-mix(in srgb, var(--bad) 18%, transparent); display: block; text-decoration: line-through; }
-.fc-diff .same { color: var(--muted); display: block; }
-@media (max-width: 900px) {
-  .fc-grid { grid-template-columns: 1fr; padding: 12px 16px; }
-  .fc-side { position: static; max-height: none; }
-  .fc-article { padding: 18px; }
-  .fc-bar { padding: 10px 16px; }
-  .layout { grid-template-columns: 1fr; padding: 12px 16px 60px; }
-  .side { position: static; max-height: none; }
-  .unit { grid-template-columns: 4px minmax(0, 1fr); }
-  .unit .seg { grid-column: 2; }
+.fc-used { max-width: 1440px; margin: 0 auto; padding: var(--s2) var(--gutter) 0; font-size: var(--t-s); color: var(--ink-2); }
+.fc-used summary { cursor: pointer; color: var(--ink-3); width: fit-content; }
+.fc-used summary:hover { color: var(--ink); }
+.fc-used > div { padding: var(--s2) 0 var(--s3); max-width: 60em; }
+.fc-used h4 { font-size: var(--t-s); font-weight: 600; color: var(--ink); margin: var(--s3) 0 2px; }
+.fc-used ul { margin: 0; padding-left: 1.3em; }
+.fc-used p { margin: 2px 0; }
+.fc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: var(--s7); padding: var(--s5) var(--gutter) var(--s7); max-width: 1440px; margin: 0 auto; }
+
+.fc-article { font-size: var(--t-l); line-height: 1.95; max-width: 38em; overflow-wrap: anywhere; }
+.fc-article h1, .fc-article h2 { font-size: 1.4em; font-weight: 600; line-height: 1.5; margin: 1.8em 0 .7em; }
+.fc-article h3 { font-size: 1.16em; font-weight: 600; line-height: 1.55; margin: 1.8em 0 .5em; }
+.fc-article h4, .fc-article h5, .fc-article h6 { font-size: 1em; font-weight: 600; margin: 1.5em 0 .4em; }
+.fc-article > :first-child, .fc-article > section:first-child > :first-child { margin-top: 0; }
+.fc-article p { margin: 0 0 1.1em; }
+.fc-article ul, .fc-article ol { padding-left: 1.4em; margin: 0 0 1.1em; }
+.fc-article code { background: var(--code-bg); border-radius: 4px; padding: .05em .3em; font-size: .86em; }
+.fc-article pre { font-family: var(--mono); font-size: 13px; line-height: 1.65; background: var(--code-bg); border-radius: var(--r-l); padding: var(--s3) var(--s4); overflow-x: auto; }
+.fc-article pre code { background: none; padding: 0; }
+.fc-article table { border-collapse: collapse; font-size: .9em; display: block; overflow-x: auto; margin: 0 0 1.1em; }
+.fc-article th, .fc-article td { border-bottom: 1px solid var(--line); padding: .35em .8em .35em 0; text-align: left; }
+.fc-article .img-ph { display: block; border: 1px dashed var(--line); border-radius: var(--r-l); padding: 1em; text-align: center; color: var(--ink-3); font-size: var(--t-s); }
+.fc-article > .note { margin-bottom: var(--s5); }
+mark.fc { background: color-mix(in srgb, var(--c) 17%, transparent); color: inherit; border-bottom: 2px solid var(--c); cursor: pointer; border-radius: 2px; }
+mark.fc:hover { background: color-mix(in srgb, var(--c) 28%, transparent); }
+mark.fc.keep { background: transparent; border-bottom-style: dotted; }
+mark.fc.delete { text-decoration: line-through; text-decoration-color: var(--brick); text-decoration-thickness: 1.5px; opacity: .6; }
+mark.fc.rewrite { border-bottom-style: dashed; }
+mark.fc.focus { outline: 2px solid var(--c); outline-offset: 2px; }
+mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-bottom: 2px solid var(--sage); border-radius: 2px; color: inherit; cursor: help; }
+.chg-del { display: inline-block; font-size: 11px; line-height: 1; padding: 2px 5px; margin: 0 2px; border-radius: 4px; color: var(--brick); border: 1px solid currentColor; cursor: help; vertical-align: middle; }
+
+.fc-side { position: sticky; top: var(--s4); align-self: start; max-height: calc(100vh - 120px); overflow: auto; padding-right: var(--s1); }
+.fc-side .side-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s2); }
+.fc-side .side-head h2 { margin: 0; }
+.fc-count { font-size: var(--t-s); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.fc-legend { display: flex; flex-wrap: wrap; gap: 2px var(--s4); font-size: var(--t-s); color: var(--ink-2); margin-bottom: var(--s3); }
+.fc-legend span { display: inline-flex; align-items: center; }
+.fc-item { padding: var(--s3) var(--s2); margin: 0 calc(-1 * var(--s2)); border-top: 1px solid var(--line-soft); border-radius: var(--r); cursor: pointer; }
+.fc-item:hover { background: var(--fill); }
+.fc-item .k { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s2); font-size: var(--t-s); color: var(--ink-3); }
+.fc-item .k .kind { color: var(--ink-2); }
+.fc-item .t { font-size: 13.5px; line-height: 1.65; overflow-wrap: anywhere; margin: 2px 0 var(--s1); }
+.fc-item .d { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); font-size: var(--t-s); color: var(--ink-2); }
+.fc-item.done .t { color: var(--ink-2); }
+.dec { display: inline-block; border-radius: 999px; padding: 0 9px; font-size: 12px; font-weight: 600; line-height: 1.7; }
+.dec-none { color: var(--ink-3); font-weight: 400; box-shadow: inset 0 0 0 1px var(--line); }
+.dec-keep { color: var(--sage-text); background: color-mix(in srgb, var(--sage) 16%, transparent); }
+.dec-delete { color: var(--brick); background: color-mix(in srgb, var(--brick) 13%, transparent); }
+.dec-rewrite { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.badge { display: inline-block; font-size: 11.5px; border-radius: 999px; padding: 0 7px; color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--line); }
+.badge.bad { color: var(--brick); box-shadow: inset 0 0 0 1px currentColor; }
+.warn-box { color: var(--brick); font-size: var(--t-s); margin: var(--s2) 0; }
+
+.fc-pop { position: absolute; z-index: 10; width: min(420px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l);
+  box-shadow: var(--pop-shadow); padding: var(--s4); font-size: 13.5px; line-height: 1.7; }
+.fc-pop .k { display: flex; flex-wrap: wrap; gap: 0 var(--s2); align-items: center; color: var(--ink-3); font-size: var(--t-s); }
+.fc-pop .k .kind { color: var(--ink-2); font-weight: 600; }
+.fc-pop .quote { margin: var(--s1) 0 var(--s2); overflow-wrap: anywhere; }
+.fc-pop .reason, .fc-pop .unit { display: block; color: var(--ink-2); font-size: var(--t-s); margin: var(--s1) 0; padding: 0; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fc-pop .acts { display: flex; gap: var(--s2); margin: var(--s3) 0 var(--s2); flex-wrap: wrap; }
+.fc-pop textarea { min-height: 56px; }
+.fc-pop label { margin-top: var(--s3); }
+
+.fc-diff { border: 1px solid var(--line); border-radius: var(--r-l); background: var(--surface); color: var(--ink); padding: 0; width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 64px); box-shadow: var(--pop-shadow); }
+.fc-diff::backdrop { background: rgb(20 20 18 / .3); }
+.fc-diff .head { position: sticky; top: 0; background: var(--surface); padding: var(--s4) var(--s5) var(--s3); border-bottom: 1px solid var(--line-soft); display: flex; gap: var(--s3); align-items: flex-start; }
+.fc-diff .head > div { flex: 1; min-width: 0; }
+.fc-diff .head h2 { margin: 0 0 2px; font-size: var(--t-m); overflow-wrap: anywhere; }
+.fc-diff .body { padding: var(--s3) var(--s5) var(--s5); overflow: auto; }
+.fc-diff pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.fc-diff .add { background: color-mix(in srgb, var(--sage) 16%, transparent); display: block; padding: 0 var(--s2); border-radius: 3px; }
+.fc-diff .del { background: color-mix(in srgb, var(--brick) 13%, transparent); display: block; padding: 0 var(--s2); border-radius: 3px; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--brick) 60%, transparent); }
+.fc-diff .same { color: var(--ink-3); display: block; }
+
+@media (max-width: 960px) {
+  :root { --gutter: 20px; }
+  .layout, .fc-grid { grid-template-columns: minmax(0, 1fr); gap: var(--s6); }
+  .side, .fc-side { position: static; max-height: none; overflow: visible; }
+  .side { border-top: 1px solid var(--line); padding-top: var(--s5); }
+  .fc-side { border-top: 1px solid var(--line); padding-top: var(--s4); }
+}
+@media (max-width: 600px) {
+  :root { --gutter: 16px; --t-xl: 19px; --t-l: 16px; }
+  header { padding-top: var(--s5); }
+  .stages { gap: 0 var(--s4); }
+  .stages button { font-size: 13px; }
+  .stages button .n { display: none; }
+  .unit { grid-template-columns: minmax(0, 1fr); }
+  .tools { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-start; }
+  #foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "note note" "status btn"; gap: var(--s2) var(--s3); padding: var(--s2) var(--gutter); }
+  .confirm-bar { display: contents; }
+  .confirm-bar textarea { grid-area: note; }
+  .confirm-bar .primary { grid-area: btn; padding: 7px 14px; font-size: 13.5px; }
+  #status { grid-area: status; min-width: 0; line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .fc-bar .primary { margin-left: 0; }
+  .fc-result .what { flex-basis: 100%; }
 }
 </style>
 </head>
 <body>
 <header><h1 id="topic">…</h1><div class="meta" id="meta"></div>
-  <nav class="stages" id="stages"></nav></header>
+  <nav class="stages" id="stages" aria-label="段階"></nav></header>
 <div id="ro-banner" class="ro-banner" hidden></div>
+<main>
 <div class="layout" id="view-design">
-  <main>
-    <section class="panel">
-      <h2>材料</h2>
-      <div class="legend">
-        <span><i class="sw" style="--c: var(--no)"></i>手元だけ</span>
-        <span><i class="sw" style="--c: var(--partial)"></i>一部は検索で届く</span>
-        <span><i class="sw" style="--c: var(--yes)"></i>検索で届く</span>
-        <span><i class="sw" style="--c: var(--answer)"></i>インタビューの回答</span>
-      </div>
-      <div class="filters" id="filters"></div>
-      <div id="units"></div>
-    </section>
-  </main>
+  <section>
+    <h2>材料</h2>
+    <div class="legend">
+      <span><i class="dot" style="--c: var(--no)"></i>手元だけ</span>
+      <span><i class="dot" style="--c: var(--partial)"></i>一部は検索で届く</span>
+      <span><i class="dot" style="--c: var(--yes)"></i>検索で届く</span>
+      <span><i class="dot" style="--c: var(--answer)"></i>インタビューの回答</span>
+    </div>
+    <div class="filters" id="filters"></div>
+    <div id="units"></div>
+  </section>
   <aside class="side">
-    <section class="panel" id="interview"><h2>インタビュー</h2></section>
-    <section class="panel" id="design"><h2>設計</h2></section>
+    <section id="interview"><h2>インタビュー</h2></section>
+    <section id="design"><h2>設計</h2></section>
   </aside>
 </div>
 <div id="view-drafting" class="drafting" hidden>
-  <div class="panel"><h2>エージェントが書いています</h2>
-    <p class="note">設計をもとに、エージェントが下書きを書いて検査しています。終わると自動で最終チェックの画面に切り替わります。この間は編集できません。</p>
-    <div id="drafting-note"></div></div>
+  <h2><i class="pulse"></i>エージェントが書いています</h2>
+  <p>設計をもとに、エージェントが下書きを書いて検査しています。終わると自動で最終チェックの画面に切り替わります。この間は編集できません。</p>
+  <div id="drafting-note"></div>
 </div>
 <div id="view-final" hidden>
   <div class="fc-bar">
     <label class="inline">下書き <select id="fc-draft"></select></label>
-    <span class="fc-legend" id="fc-legend"></span>
-    <span class="fc-count" id="fc-count"></span>
     <button id="fc-apply" class="primary">反映</button>
   </div>
   <div class="fc-result" id="fc-result" hidden></div>
   <details class="fc-used" id="fc-used" hidden><summary>この下書きに使った設定</summary><div id="fc-used-body"></div></details>
   <div class="fc-grid">
     <article id="fc-article" class="fc-article"></article>
-    <aside class="fc-side"><div id="fc-items"></div></aside>
+    <aside class="fc-side">
+      <div class="side-head"><h2>指摘</h2><span class="fc-count" id="fc-count"></span></div>
+      <div class="fc-legend" id="fc-legend"></div>
+      <div id="fc-items"></div>
+    </aside>
   </div>
   <dialog class="fc-diff" id="fc-diff"></dialog>
 </div>
+</main>
 <div id="fc-pop" class="fc-pop" hidden></div>
-<div id="confirm-bar" class="confirm-bar" hidden>
-  <textarea id="confirm-note" placeholder="エージェントへの指示（任意）"></textarea>
-  <button id="confirm-btn" class="primary">確定してエージェントに渡す</button>
-</div>
-<div id="status">読み込み中</div>
+<footer id="foot">
+  <div id="status" role="status">読み込み中</div>
+  <div id="confirm-bar" class="confirm-bar" hidden>
+    <textarea id="confirm-note" rows="1" aria-label="エージェントへの指示" placeholder="エージェントへの指示（任意）"></textarea>
+    <button id="confirm-btn" class="primary">確定してエージェントに渡す</button>
+  </div>
+</footer>
 <script>
 const S = { data: null, filter: "all", timers: {}, version: "", viewing: null, lastInput: 0, unitsKey: "" };
 const FC = { draft: null, html: "", items: [], removed: [], table: [], timer: null, finals: {}, final: null,
@@ -227,7 +323,7 @@ const L = () => S.data.labels;
 const kindName = (k) => L().kind[k] || k;
 const kindColor = (k) => (k in L().kind ? `var(--k-${k})` : "var(--k-lint)");
 
-function status(msg, err) { const n = $("#status"); n.textContent = msg; n.className = err ? "err" : ""; }
+function status(msg, err) { const n = $("#status"); n.textContent = msg; n.title = msg; n.className = err ? "err" : ""; }
 
 function request(path, opts = {}) {
   const headers = { "X-Kumimasu-Token": TOKEN, ...(opts.headers || {}) };
@@ -277,15 +373,15 @@ function renderUnits() {
     const body = u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`;
     const isSkip = d && d.skip.some((x) => x.units.includes(u.id));
     const isAside = d && d.aside.some((x) => x.id === u.id);
-    const seg = use ? `<div class="tools"><div class="seg">${Object.keys(uses).map((x) =>
-      `<button data-use="${x}" class="${x === use ? "on" : ""}" title="${uses[x]}">${uses[x]}</button>`).join("")}</div>
-      <div class="seg"><button data-noise="skip" class="${isSkip ? "on" : ""}" title="説明しない前提にする（書かない）">前提扱い</button>` +
-      `<button data-noise="aside" class="${isAside ? "on" : ""}" title="脱線として入れる">脱線</button></div></div>` : "";
+    const seg = use ? `<div class="tools"><div class="seg" role="group" aria-label="使い方">${Object.keys(uses).map((x) =>
+      `<button data-use="${x}" class="${x === use ? "on" : ""}" aria-pressed="${x === use}">${uses[x]}</button>`).join("")}</div>
+      <div class="toggles"><button data-noise="skip" class="toggle${isSkip ? " on" : ""}" aria-pressed="${isSkip}" title="説明しない前提にする（書かない）">前提扱い</button>` +
+      `<button data-noise="aside" class="toggle${isAside ? " on" : ""}" aria-pressed="${isAside}" title="脱線として入れる">脱線</button></div></div>` : "";
     const row = document.createElement("div");
     row.className = "unit" + (use === "drop" ? " drop" : "");
-    const same = u.members && u.members.length ? ` · 同じ内容: ${u.members.map(esc).join(", ")}` : "";
+    const same = u.members && u.members.length ? `<span>同じ内容: ${u.members.map(esc).join(", ")}</span>` : "";
     const ctx = u.context ? `<div class="why">問い: ${esc(u.context)}</div>` : "";
-    row.innerHTML = `<div class="bar" style="--c: ${color}"></div><div><div class="head">${esc(u.id)} · ${esc(tag)}${where ? " · " + esc(where) : ""}${same}</div>${ctx}${body}</div>${seg}`;
+    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span>${esc(where)}</span>` : ""}${same}</div>${ctx}${body}</div>${seg}`;
     row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => save("/api/design", { units: { [u.id]: b.dataset.use } }, true)));
     row.querySelector("button[data-noise=skip]")?.addEventListener("click", () =>
       save("/api/design", { toggle_skip: { unit: u.id, on: !isSkip } }, true));
@@ -300,11 +396,11 @@ function renderInterview() {
   const box = $("#interview");
   const iv = S.data.interview;
   if (!iv) { box.innerHTML = `<h2>インタビュー</h2><p class="note">まだ質問がありません。<code>kumimasu interview DIR</code> を実行してください。</p>`; return; }
-  box.innerHTML = `<h2>インタビュー</h2><p class="note">答えは手元の材料として設計と下書きに渡ります。空欄の質問は使われません。</p>` +
-    iv.questions.map((q) => `<div class="q"><div class="qt">${esc(q.id)}. ${esc(q.question)}</div>
+  box.innerHTML = `<h2>インタビュー</h2><p class="hint">答えは手元の材料として設計と下書きに渡ります。空欄の質問は使われません。</p>` +
+    iv.questions.map((q) => `<div class="q"><div class="qt" id="qt-${esc(q.id)}">${esc(q.id)}. ${esc(q.question)}</div>
       ${q.why ? `<div class="why">${esc(q.why)}</div>` : ""}
-      ${q.units.length ? `<div class="refs">関連: ${q.units.map(esc).join(", ")}</div>` : ""}
-      <textarea data-q="${esc(q.id)}">${esc(q.answer)}</textarea></div>`).join("");
+      ${q.units.length ? `<div class="refs">関連 ${q.units.map(esc).join(", ")}</div>` : ""}
+      <textarea data-q="${esc(q.id)}" aria-labelledby="qt-${esc(q.id)}">${esc(q.answer)}</textarea></div>`).join("");
   box.querySelectorAll("textarea").forEach((t) => t.addEventListener("input", () => {
     debounce("iv", () => save("/api/interview", { answers: Object.fromEntries([...box.querySelectorAll("textarea")].map((x) => [x.dataset.q, x.value])) }, false));
   }));
@@ -315,29 +411,32 @@ function renderCounts() {
   if (!box) return;
   const n = Object.fromEntries(Object.keys(L().use).map((k) => [k, 0]));
   S.data.design.units.forEach((u) => n[u.use]++);
-  box.textContent = Object.entries(L().use).map(([k, v]) => `${v} ${n[k]}`).join(" · ");
+  box.innerHTML = Object.entries(L().use).map(([k, v]) => `<span>${esc(v)} ${n[k]}</span>`).join("");
 }
 
 function renderDesign() {
   const box = $("#design");
   const d = S.data.design;
   if (!d) { box.innerHTML = `<h2>設計</h2><p class="note">まだ設計がありません。インタビューに答えてから <code>kumimasu design DIR</code> を実行してください。</p>`; return; }
+  const field = (id, label, hint, input) => `<div class="field"><label for="${id}">${label}</label>${hint ? `<p class="hint">${hint}</p>` : ""}${input}</div>`;
+  const area = (id, label, hint, value) => field(id, label, hint, `<textarea id="${id}">${esc(value)}</textarea>`);
   box.innerHTML = `<h2>設計</h2>
-    <label>ねらい</label><textarea id="purpose">${esc(d.purpose)}</textarea>
-    <label>読者が持ち帰るもの（1 行に 1 つ、最大 3 つ）</label><textarea id="takeaways">${esc(d.takeaways.join("\n"))}</textarea>
-    <label>順番の手がかり（1 行に 1 つ）</label><textarea id="order">${esc(d.order.join("\n"))}</textarea>
-    <label>書かない話題（1 行に 1 つ。下書きの依頼に話題の名前だけが載る）</label><textarea id="avoid">${esc(d.avoid.join("\n"))}</textarea>
-    <label>ウェブで調べること（1 行に 1 つ、最大 5 つ。調査役には、この一覧と題・読者・ねらい・持ち帰りだけが渡る）</label><textarea id="research">${esc(d.research.join("\n"))}</textarea>
-    <label>形（1 行に 1 つ。内容が並び・手順・比較・コードのときに使う形）</label><textarea id="forms">${esc(d.forms.join("\n"))}</textarea>
-    <label>形の好み（設計と下書きの依頼にそのまま載る）</label><textarea id="form_prefs">${esc(d.form_prefs)}</textarea>
-    <label>目標の字数</label><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}">
-    <div class="counts" id="counts"></div>
-    <label>説明しない前提（skip。読者は知っているか、自分で調べる。1–3 個）</label>
-    <div id="skips">${d.skip.map((x, i) => `<div class="noise"><input data-skip="${i}" value="${esc(x.label)}"><span class="refs">${x.units.map(esc).join(", ")}</span></div>`).join("") || `<p class="note">なし。材料の「前提扱い」で足せます。</p>`}</div>
-    <label>脱線（aside。著者が出くわした場面に入れる。1–2 個）</label>
-    <div id="asides">${d.aside.map((x, i) => `<div class="noise"><span class="refs">${esc(x.id)}</span><input data-aside="${i}" placeholder="場所の手がかり" value="${esc(x.where)}"></div>`).join("") || `<p class="note">なし。材料の「脱線」で足せます。</p>`}</div>
+    ${area("purpose", "ねらい", "", d.purpose)}
+    ${area("takeaways", "読者が持ち帰るもの", "1 行に 1 つ、最大 3 つ", d.takeaways.join("\n"))}
+    ${field("target_length", "目標の字数", "", `<div class="length"><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}"><div class="counts" id="counts"></div></div>`)}
+    <h3>組み立て</h3>
+    ${area("order", "順番の手がかり", "1 行に 1 つ", d.order.join("\n"))}
+    ${area("forms", "形", "1 行に 1 つ。内容が並び・手順・比較・コードのときに使う形", d.forms.join("\n"))}
+    ${area("form_prefs", "形の好み", "設計と下書きの依頼にそのまま載る", d.form_prefs)}
+    <h3>書く範囲</h3>
+    ${area("avoid", "書かない話題", "1 行に 1 つ。下書きの依頼に話題の名前だけが載る", d.avoid.join("\n"))}
+    ${area("research", "ウェブで調べること", "1 行に 1 つ、最大 5 つ。調査役には、この一覧と題・読者・ねらい・持ち帰りだけが渡る", d.research.join("\n"))}
+    <div class="field"><span class="label">説明しない前提</span><p class="hint">読者は知っているか、自分で調べる。1–3 個</p>
+    <div id="skips">${d.skip.map((x, i) => `<div class="noise"><input data-skip="${i}" aria-label="前提の名前" value="${esc(x.label)}"><span class="refs">${x.units.map(esc).join(", ")}</span></div>`).join("") || `<p class="note">なし。材料の「前提扱い」で足せます。</p>`}</div></div>
+    <div class="field"><span class="label">脱線</span><p class="hint">著者が出くわした場面に入れる。1–2 個</p>
+    <div id="asides">${d.aside.map((x, i) => `<div class="noise"><span class="refs">${esc(x.id)}</span><input data-aside="${i}" aria-label="場所の手がかり" placeholder="場所の手がかり" value="${esc(x.where)}"></div>`).join("") || `<p class="note">なし。材料の「脱線」で足せます。</p>`}</div></div>
     <div id="warnings"></div>
-    <label>書き方のルール（オフのルールは design.yaml に残り、下書きの依頼には載らない）</label>
+    <h3>書き方のルール</h3><p class="hint">オフのルールは design.yaml に残り、下書きの依頼には載らない</p>
     <div id="rules"></div>`;
   const lines = (id) => $(id).value.split("\n").map((s) => s.trim()).filter(Boolean);
   const push = () => debounce("design", () => save("/api/design", {
@@ -368,10 +467,10 @@ function renderRules() {
     if (now) send(); else debounce("rules", send);
   };
   box.innerHTML = d.rules.map((r, i) => `<div class="rule${r.on ? "" : " off"}">
-      <input type="checkbox" data-i="${i}" ${r.on ? "checked" : ""} title="オン・オフ">
-      <input type="text" data-i="${i}" value="${esc(r.text)}">
-      <button data-del="${i}" title="削除">×</button></div>`).join("") +
-    `<button id="addrule" class="add">ルールを足す</button>`;
+      <input type="checkbox" data-i="${i}" ${r.on ? "checked" : ""} title="オン・オフ" aria-label="ルールを使う">
+      <input type="text" data-i="${i}" aria-label="ルール" value="${esc(r.text)}">
+      <button data-del="${i}" title="削除" aria-label="削除">×</button></div>`).join("") +
+    `<button id="addrule" class="btn add">ルールを足す</button>`;
   box.querySelectorAll("input[type=checkbox]").forEach((el) => el.addEventListener("change", () => {
     d.rules[+el.dataset.i].on = el.checked;
     el.parentElement.classList.toggle("off", !el.checked);
@@ -397,7 +496,7 @@ function renderWarnings() {
   const box = $("#warnings");
   if (!box) return;
   const w = S.data.warnings;
-  box.innerHTML = w.length ? `<label>使う材料から出てしまう「書かない」単位（判断は著者に任せる。use を変えたら <code>kumimasu review DIR</code> で計算し直す）</label>` +
+  box.innerHTML = w.length ? `<span class="label">使う材料から出てしまう「書かない」単位</span><p class="hint">判断は著者に任せる。use を変えたら <code>kumimasu review DIR</code> で計算し直す</p>` +
     `<ul class="warn">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
 }
 
@@ -428,7 +527,7 @@ function renderAll() {
   const p = S.data.project;
   $("#topic").textContent = p.topic;
   document.title = "記事を書く: " + p.topic;
-  $("#meta").textContent = `読者: ${p.audience} · 種類: ${p.kind} · 目標 ${p.length} 字 · 単位 ${S.data.units.length}`;
+  $("#meta").innerHTML = [`読者 ${p.audience}`, `種類 ${p.kind}`, `目標 ${p.length} 字`, `材料 ${S.data.units.length} 単位`, `ラウンド ${S.data.stage.round}`].map((x) => `<span>${esc(x)}</span>`).join("");
   renderUnits(); renderInterview(); renderDesign();
 }
 
@@ -447,8 +546,8 @@ function renderStages() {
   const st = S.data.stage;
   const cur = st.stages.indexOf(st.stage);
   $("#stages").innerHTML = st.stages.map((s, i) =>
-    `<button data-st="${s}" class="${i === cur ? "cur" : ""}${s === S.viewing ? " on" : ""}" ${i > cur ? "disabled" : ""}>${i + 1}. ${esc(st.labels[s])}</button>`)
-    .join(`<span class="sep">›</span>`) + `<span class="round">ラウンド ${st.round}</span>`;
+    `<button data-st="${s}" class="${i === cur ? "cur" : ""}${s === S.viewing ? " on" : ""}" ${i > cur ? "disabled" : ""}${s === S.viewing ? ' aria-current="page"' : ""}><span class="n">${i + 1}</span>${esc(st.labels[s])}</button>`)
+    .join("");
   $("#stages").querySelectorAll("button[data-st]").forEach((b) => b.addEventListener("click", () => showScreen(b.dataset.st)));
 }
 
@@ -476,7 +575,7 @@ function showScreen(s) {
     banner.hidden = false;
     banner.textContent = `読み取り専用（今の段階: ${st.labels[st.stage]}）`;
   } else banner.hidden = true;
-  if (screen === "drafting") $("#drafting-note").innerHTML = last && last.note ? `<p>エージェントへの指示（本人が書いたもの）: ${esc(last.note)}</p>` : "";
+  if (screen === "drafting") $("#drafting-note").innerHTML = last && last.note ? `<p class="label">エージェントへの指示（本人が書いたもの）</p><p>${esc(last.note)}</p>` : "";
   $("#confirm-bar").hidden = !editable;
   renderStages();
   if (screen === "final") openFinal().catch((e) => status("読み込めません: " + e.message, true));
@@ -602,7 +701,6 @@ async function openFinal() {
   const want = S.data.stage.draft;
   FC.draft = drafts.includes(FC.draft) ? FC.draft : drafts.includes(want) ? want : drafts[0];
   sel.value = FC.draft;
-  $("#fc-legend").innerHTML = Object.keys(L().kind).map((k) => `<span><i class="sw" style="--c:${kindColor(k)}"></i>${esc(kindName(k))}</span>`).join("");
   await loadDraft(FC.draft);
 }
 
@@ -646,11 +744,12 @@ function renderResult() {
   const out = FC.finals[FC.draft];
   if (!out) { box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = `<span>結果: <b>${esc(out)}</b>（読み取り専用。直すときは ${esc(FC.draft)} の決定を変えて反映し直す）</span>
-    <button id="fc-view">${FC.viewing ? "下書きに戻る" : "結果を見る"}</button>
-    ${FC.lastApply ? `<button id="fc-diffbtn">差分</button>` : ""}
-    <button id="fc-copy">コピー</button>
-    <button id="fc-download">ダウンロード</button>
+  box.innerHTML = `<span class="what">結果 <b>${esc(out)}</b></span>
+    <button id="fc-view" class="btn">${FC.viewing ? "下書きに戻る" : "結果を見る"}</button>
+    ${FC.lastApply ? `<button id="fc-diffbtn" class="btn quiet">差分</button>` : ""}
+    <button id="fc-copy" class="btn quiet">コピー</button>
+    <button id="fc-download" class="btn quiet">ダウンロード</button>
+    <span class="note result-note">結果は読み取り専用です。直すときは ${esc(FC.draft)} の決定を変えて反映し直します。</span>
     <textarea id="fc-copybox" readonly hidden></textarea>`;
   $("#fc-view").addEventListener("click", () => toggleResult().catch((e) => status("読み込めません: " + e.message, true)));
   $("#fc-copy").addEventListener("click", copyResult);
@@ -669,9 +768,11 @@ async function toggleResult() {
   FC.viewing = true;
   const nr = r.changes.filter((c) => c.kind === "rewritten").length, nd = r.changes.filter((c) => c.kind === "deleted").length;
   const art = $("#fc-article");
-  art.innerHTML = `<p class="note">${esc(r.final)}（読み取り専用）· <mark class="chg">書き直した所</mark> ${nr} · <span class="chg-del">削除</span> ${nd}（印にマウスを載せると元の文）</p>` + r.html;
+  art.innerHTML = `<p class="note">${esc(r.final)}（読み取り専用）　<mark class="chg">書き直した所</mark> ${nr}　<span class="chg-del">削除</span> ${nd}　印にマウスを載せると元の文が出ます</p>` + r.html;
   markChanges(spanTable(art), r.changes);
   $("#fc-items").innerHTML = `<p class="note">反映の結果を表示しています。決定は元の下書きで変えます。</p>`;
+  $("#fc-legend").hidden = true;
+  $("#fc-count").textContent = "";
   setApplyEnabled();
   renderResult();
 }
@@ -742,25 +843,38 @@ function rewriteBadge(it) {
   return ` <span class="badge">固定${it.rewrite.source === "user" ? "・手で直した" : ""}</span>` + (it.note_changed ? ` <span class="badge bad">メモ変更</span>` : "");
 }
 
-function itemHead(it, votes) {
-  return `${esc(kindName(it.kind))}${it.category ? " · " + esc(it.category) : ""}${it.votes ? votes + esc(it.votes) : ""}`;
+function itemHead(it) {
+  return `<span class="dot" style="--c:${kindColor(it.kind)}"></span><span class="kind">${esc(kindName(it.kind))}</span>` +
+    `${it.category ? `<span>${esc(it.category)}</span>` : ""}${it.votes ? `<span>票 ${esc(it.votes)}</span>` : ""}`;
+}
+
+function renderLegend() {
+  const kinds = [...new Set(FC.items.map((i) => i.kind))];
+  const box = $("#fc-legend");
+  box.hidden = !kinds.length;
+  box.innerHTML = kinds.map((k) => `<span><i class="dot" style="--c:${kindColor(k)}"></i>${esc(kindName(k))}</span>`).join("");
 }
 
 function renderItems() {
   const box = $("#fc-items");
   const decided = FC.items.filter((i) => i.decision).length;
-  $("#fc-count").textContent = `${FC.items.length} 項目 · 決めた ${decided}`;
-  box.innerHTML = FC.items.map((it) => `<div class="fc-item${it.decision ? " done" : ""}" data-item="${esc(it.id)}" style="--c:${kindColor(it.kind)}">
-      <div class="k">${itemHead(it, " · ")}${it.start === null ? " · 位置不明" : ""}</div>
+  $("#fc-count").textContent = `${FC.items.length} 件中 ${decided} 件決めた`;
+  renderLegend();
+  box.innerHTML = FC.items.map((it) => `<div class="fc-item${it.decision ? " done" : ""}" data-item="${esc(it.id)}" role="button" tabindex="0">
+      <div class="k">${itemHead(it)}${it.start === null ? "<span>位置不明</span>" : ""}</div>
       <div class="t">${esc(it.text.slice(0, 90))}${it.text.length > 90 ? "…" : ""}</div>
-      <div class="d">${esc(L().decision[it.decision])}${it.note ? `：${esc(it.note)}` : ""}${rewriteBadge(it)}</div></div>`).join("") ||
+      <div class="d"><span class="dec dec-${it.decision || "none"}">${esc(L().decision[it.decision])}</span>${it.note ? `<span>${esc(it.note)}</span>` : ""}${rewriteBadge(it)}</div></div>`).join("") ||
     `<p class="note">検査で当たった箇所はありません。本文を選ぶと自分の項目を足せます。</p>`;
-  box.querySelectorAll(".fc-item").forEach((el) => el.addEventListener("click", () => {
-    const m = [...document.querySelectorAll("mark.fc")].find((x) => x.dataset.item === el.dataset.item);
-    document.querySelectorAll("mark.fc.focus").forEach((x) => x.classList.remove("focus"));
-    if (m) { m.scrollIntoView({ block: "center" }); m.classList.add("focus"); }
-    itemPop(el.dataset.item, (m || el).getBoundingClientRect());
-  }));
+  box.querySelectorAll(".fc-item").forEach((el) => {
+    const open = () => {
+      const m = [...document.querySelectorAll("mark.fc")].find((x) => x.dataset.item === el.dataset.item);
+      document.querySelectorAll("mark.fc.focus").forEach((x) => x.classList.remove("focus"));
+      if (m) { m.scrollIntoView({ block: "center" }); m.classList.add("focus"); }
+      itemPop(el.dataset.item, (m || el).getBoundingClientRect());
+    };
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+  });
 }
 
 function placeFcPop(pop, rect) {
@@ -774,20 +888,20 @@ function placeFcPop(pop, rect) {
 }
 
 function decisionButtons(cur) {
-  return `<div class="acts">${Object.entries(L().decision).filter(([d]) => d).map(([d, label]) =>
-    `<button data-d="${d}" class="${cur === d ? "on" : ""}">${esc(label)}</button>`).join("")}</div>`;
+  return `<div class="acts"><div class="seg" role="group" aria-label="決定">${Object.entries(L().decision).filter(([d]) => d).map(([d, label]) =>
+    `<button data-d="${d}" class="${cur === d ? "on" : ""}">${esc(label)}</button>`).join("")}</div></div>`;
 }
 
 function rewriteBlock(it) {
   if (it.decision !== "rewrite") return "";
   if (it.stale) return `<div class="warn-box">下書きが変わったため、この項目は反映しません（元の文: 「${esc(it.rewrite ? it.rewrite.made_from : it.text)}」）。` +
-    `決め直すか、書き直し直してください。</div><div class="acts"><button id="fc-regen">もう一度書き直す</button></div>`;
+    `決め直すか、書き直し直してください。</div><div class="acts"><button id="fc-regen" class="btn">もう一度書き直す</button></div>`;
   if (!it.rewrite) return `<div class="reason">まだ書き直していません。次の反映で、この項目だけを書き直します。</div>`;
   const src = it.rewrite.source === "user" ? "手で直した" : "LLM";
   return `<label>書き直し結果（${src}・固定。ほかの項目を変えても変わりません）</label>
     <textarea id="fc-rewrite-text">${esc(it.rewrite.result)}</textarea>
     ${it.note_changed ? `<div class="warn-box">メモが、この結果を作った後に変わっています。メモを反映させるなら書き直し直してください。</div>` : ""}
-    <div class="acts"><button id="fc-regen">もう一度書き直す</button></div>`;
+    <div class="acts"><button id="fc-regen" class="btn">もう一度書き直す</button></div>`;
 }
 
 function itemPop(id, rect) {
@@ -795,14 +909,14 @@ function itemPop(id, rect) {
   const it = cur();
   if (!it) return;
   const pop = $("#fc-pop");
-  pop.innerHTML = `<div class="k">${itemHead(it, " · 票 ")}</div>
+  pop.innerHTML = `<div class="k">${itemHead(it)}</div>
     <div class="quote">「${esc(it.text)}」</div>
     ${it.reason ? `<div class="reason">${esc(it.reason)}</div>` : ""}
     ${it.unit ? `<div class="unit">材料 ${esc(it.unit.id)}: ${esc(it.unit.text)}</div>` : ""}
     ${decisionButtons(it.decision)}
-    <textarea id="fc-note" placeholder="書き直すときのメモ（任意）">${esc(it.note)}</textarea>
+    <textarea id="fc-note" aria-label="メモ" placeholder="書き直すときのメモ（任意）">${esc(it.note)}</textarea>
     <div id="fc-rewrite">${rewriteBlock(it)}</div>
-    ${it.kind === "user" ? `<div class="acts"><button id="fc-remove">この項目を消す</button></div>` : ""}`;
+    ${it.kind === "user" ? `<div class="acts"><button id="fc-remove" class="btn quiet">この項目を消す</button></div>` : ""}`;
   const refresh = () => { const n = cur(); if (n) { pop.querySelector("#fc-rewrite").innerHTML = rewriteBlock(n); bindRewrite(); } };
   const bindRewrite = () => {
     pop.querySelector("#fc-rewrite-text")?.addEventListener("input", (e) => {
@@ -850,8 +964,8 @@ function fcSelection() {
 
 function newItemPop(t) {
   const pop = $("#fc-pop");
-  pop.innerHTML = `<div class="k">${esc(kindName("user"))}</div><div class="quote">「${esc(t.quote.slice(0, 120))}」</div>
-    ${decisionButtons("")}<textarea id="fc-note" placeholder="書き直すときのメモ（任意）"></textarea>`;
+  pop.innerHTML = `<div class="k">${itemHead({ kind: "user" })}</div><div class="quote">「${esc(t.quote.slice(0, 120))}」</div>
+    ${decisionButtons("")}<textarea id="fc-note" aria-label="メモ" placeholder="書き直すときのメモ（任意）"></textarea>`;
   pop.querySelectorAll("button[data-d]").forEach((b) => b.addEventListener("click", () => {
     FC.items.push({ kind: "user", start: t.start, end: t.end, text: t.quote, decision: b.dataset.d, note: pop.querySelector("#fc-note").value });
     window.getSelection().removeAllRanges();
@@ -907,7 +1021,7 @@ function showDiff() {
   box.innerHTML = `<div class="head"><div><h2>${esc(FC.draft)} → ${esc(r.out)}</h2><p class="note">削った ${r.deleted} · 書き直した ${r.rewritten}（固定の結果を使った ${r.reused}）` +
     `${r.skipped.length ? ` · 反映しなかった ${r.skipped.length}（コードの中、または答えが無い）` : ""}` +
     `${r.stale.length ? ` · 下書きが変わったので反映しなかった ${r.stale.length}` : ""} · 呼び出し ${r.calls}</p></div>` +
-    `<button id="fc-diff-close">閉じる</button></div>` +
+    `<button id="fc-diff-close" class="btn">閉じる</button></div>` +
     `<div class="body"><pre>${r.diff.filter(([t]) => t !== " ").map(([t, l]) => `<span class="${cls[t]}">${esc(t)} ${esc(l) || " "}</span>`).join("") || "変更はありません"}</pre></div>`;
   $("#fc-diff-close").addEventListener("click", () => box.close());
   box.onclick = (e) => { if (e.target === box) box.close(); };
