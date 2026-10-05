@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from .errors import StepError
 from .generate import DATA_NOTE_JA
-from .interview import unit_lines
+from .interview import strip_unit_refs, unit_lines
 from .llm import STR, arr, ask_json, enum, obj, rows, strings
 from .model import USES, Aside, Conflict, Design, Project, Rule, Skip, Unit, UnitUse
 from .workdir import WorkDir
@@ -211,7 +211,7 @@ REVIEW_PROMPT_JA = DATA_NOTE_JA + """
   - yes: 使う材料（コード・設定・手順を含む）を書けば、使わない材料の情報がほぼそのまま出る
   - partial: 一部が出る
   - no: 出ない
-  by には、出てしまう原因になる使う材料の番号（最大 4 つ）、note には何が出るかを 20 字以内で書きます。no のときは by を空にします。
+  by には、出てしまう原因になる使う材料の番号（最大 4 つ）を入れます。note には、記事に出てしまう内容そのものを、番号を使わずに 40 字以内で具体的に書きます（例:「exiftool の日付書式を指定するコマンド」）。著者は note だけを読んで、何が出るかを判断します。no のときは by を空にします。
 (b) avoid: この話題で記事を書く人が、頼まれなくても書き足しがちで、この設計では書かないことにしたい話題の名前を 0–6 個。使わない材料から読み取れるもの（例:「専用スキャナーの価格比較」）と、話題の型として足されがちなもの（例:「FAQ」「一般的な運用の助言」）。それぞれ 20 字以内の名詞句にし、材料の文を写さないでください。
 
 # 使う材料
@@ -236,6 +236,7 @@ def review_prompt(p: Project, d: Design, units: list[Unit]) -> str:
 
 
 AVOID_MAX_CHARS = 30
+NOTE_CHARS = 60
 
 
 def parse_review(data: dict, d: Design) -> Design:
@@ -245,7 +246,8 @@ def parse_review(data: dict, d: Design) -> Design:
         by = [b for b in row.get("by", []) if d.use_of(b) in ("deep", "mention")][:4]
         if level in ("yes", "partial") and d.use_of(cid) == "drop" and by and cid not in seen:
             seen.add(cid)
-            conflicts.append(Conflict(id=cid, by=by, level=level, note=str(row.get("note", ""))[:40]))
+            note = strip_unit_refs(str(row.get("note", "")), set(d.unit_ids()))[:NOTE_CHARS]
+            conflicts.append(Conflict(id=cid, by=by, level=level, note=note))
     avoid = [a for a in strings(data, "avoid") if 0 < len(a) <= AVOID_MAX_CHARS][:AVOID_MAX]
     return d.model_copy(update={"conflicts": conflicts, "avoid": avoid, "avoid_proposed": avoid})
 

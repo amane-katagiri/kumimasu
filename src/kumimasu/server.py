@@ -131,7 +131,7 @@ class WriteApp:
                 "units": [u.model_dump() | {"firsthand": u.firsthand} for u in units],
                 "interview": wd.interview().model_dump() if wd.interview_file.exists() else None,
                 "design": design.model_dump() if design else None,
-                "warnings": [c.message() for c in design.live_conflicts()] if design else []}
+                "conflicts": [c.model_dump() for c in design.live_conflicts()] if design else []}
 
     def save_answers(self, body: dict) -> dict:
         answers = body.get("answers")

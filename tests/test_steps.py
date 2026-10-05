@@ -34,11 +34,11 @@ from kumimasu import cli_common as cc
 from kumimasu import factcheck, ops, rules
 from kumimasu.check import check, dash_hits, number_flags
 from kumimasu.cli import app
-from kumimasu.design import design, noise_workdir, sync_design
+from kumimasu.design import design, noise_workdir, parse_review, sync_design
 from kumimasu.draft import draft, draft_prompt
 from kumimasu.errors import StepError
 from kumimasu.factcheck import UrlStatus
-from kumimasu.interview import interview
+from kumimasu.interview import interview, parse_questions, strip_unit_refs
 from kumimasu.llm import (
     CachedProvider,
     ClaudeCliProvider,
@@ -52,6 +52,8 @@ from kumimasu.polish import POLISH_RULES, Flag, apply_replacements, neighborhood
 from kumimasu.research import load_research, research
 from kumimasu.review import export_final
 from kumimasu.revise import instructions, revise
+from kumimasu.show import snapshot
+from kumimasu.show import text as show_text
 from kumimasu.surface import detect_surface
 from kumimasu.textutil import blocks
 from kumimasu.workdir import WorkDir, init_workdir
@@ -115,6 +117,8 @@ def test_interview_questions_and_answers_become_units(wd):
     assert [q.id for q in iv.questions] == ["q1", "q2", "q3"]
     assert iv.questions[2].question == "読者に一つだけ持ち帰ってほしいことは何ですか" and "always_ask" in iv.questions[2].why
     assert iv.questions[0].units == ["m4"]
+    assert iv.questions[0].question == "LINE で受け取った写真だけ EXIF が消えていると気づいたとき、何を考えましたか"
+    assert iv.questions[0].context == "LINE 経由の写真は EXIF が消えていて、更新日時で代用した"
     ans = wd.answer_units()
     assert [u.id for u in ans] == ["q1"] and ans[0].firsthand and ans[0].text.startswith("撮影日が無い写真")
     assert "問い" not in ans[0].text and "EXIF が消えている" in ans[0].context
@@ -139,11 +143,11 @@ def test_design_defaults_and_limits(wd):
     assert "m9" not in uses
     assert d.avoid == ["写真管理アプリの比較", "FAQ"]
     assert [(c.id, c.by) for c in d.conflicts] == [("m3", ["m12"])]
-    assert d.live_conflicts()[0].message() == "m3 は書かないにしたが、m12 を載せると出ます（コマンドが出る）"
+    assert d.live_conflicts()[0].message() == "「コマンドが出る」が出る（原因: m12 / 書かない側: m3）"
     d2 = d.model_copy(update={"units": [u.model_copy(update={"use": "drop"}) if u.id == "m12" else u for u in d.units]})
     assert d2.live_conflicts() == []
     design_text = next(c["prompt"] for c in p.calls if "記事の設計を提案" in c["prompt"])
-    assert "問い: m4 の LINE" in design_text and "選び方の指示" in design_text
+    assert "問い: LINE で受け取った写真だけ" in design_text and "選び方の指示" in design_text
     with pytest.raises(StepError):
         design(wd, p, defaults())
 
@@ -475,12 +479,12 @@ def test_server_state_answers_and_design(wd):
         design(wd, p, defaults())
 
         ops.set_stage(wd, "design")
-        assert c.get("/api/state")[1]["warnings"] == [wd.design().live_conflicts()[0].message()]
+        assert c.get("/api/state")[1]["conflicts"] == [{"id": "m3", "by": ["m12"], "level": "yes", "note": "コマンドが出る"}]
         code, body = c.put("/api/design", {"units": {"m1": "deep", "m12": "drop"}, "takeaways": ["a", " ", "b"],
                                            "target_length": 800, "avoid": ["価格の比較"]})
         d = wd.design()
         assert code == 200 and d.use_of("m1") == "deep" and d.takeaways == ["a", "b"] and d.target_length == 800
-        assert d.avoid == ["価格の比較"] and body["warnings"] == []
+        assert d.avoid == ["価格の比較"] and body["conflicts"] == []
         assert c.get("/api/state")[1]["units"][1]["members"] == ["m9"]
         rules = [{"text": r.text, "on": r.text != wd.design().rules[0].text} for r in wd.design().rules]
         code, body = c.put("/api/design", {"rules": rules + [{"text": "足したルール", "on": True}]})
@@ -523,7 +527,7 @@ def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):
     assert "deep 3" in run("design", str(d))
     assert "aside: m7" in run("noise", str(d))
     out = run("review", str(d), "--keep-avoid")
-    assert "warning: m3 は書かないにしたが、m12 を載せると出ます" in out and "写真管理アプリの比較" in out
+    assert "warning: 「コマンドが出る」が出る（原因: m12 / 書かない側: m3）" in out and "写真管理アプリの比較" in out
     run("set", str(d), "unit", "m1", "--use", "deep")
     run("confirm", str(d), "--note", "短めに")
     assert r.invoke(app, ["set", str(d), "unit", "m1", "--use", "drop"]).exit_code == 1
@@ -697,3 +701,99 @@ def test_export_never_follows_a_symlink(tmp_path):
     (out / "w-draft-20261005-1407.md").symlink_to(target)
     dest = export_final(w, "draft.md", out, datetime(2026, 10, 5, 14, 7, tzinfo=UTC))
     assert dest.name == "w-draft-20261005-1407-2.md" and not target.exists()
+
+
+@pytest.mark.parametrize(("text", "want"), [
+    ("[m38] の件は、なぜ諦めたのですか", "なぜ諦めたのですか"),
+    ("m4 の LINE の写真で何が起きましたか", "LINE の写真で何が起きましたか"),
+    ("LINE の写真（m4、m5）で何が起きましたか", "LINE の写真で何が起きましたか"),
+    ("単位 m12 では何を試しましたか？ [m38]の件はどうですか", "何を試しましたか？ どうですか"),
+    ("M2 Mac の m2 と m99 の話", "M2 Mac の m2 と m99 の話"),
+])
+def test_strip_unit_refs(text, want):
+    assert strip_unit_refs(text, {"m4", "m5", "m12", "m38"}) == want
+
+
+def test_questions_without_text_after_stripping_are_dropped(wd):
+    units = wd.material_units()
+    iv = parse_questions({"questions": [{"question": "[m1]", "units": ["m1"]},
+                                        {"question": "m1 について。なぜですか", "context": "m1・m2 のメモ", "units": ["m1", "m1", "zz"]}]},
+                         units)
+    assert [(q.id, q.question, q.context, q.units) for q in iv.questions] == [("q1", "なぜですか", "", ["m1"])]
+
+
+def test_waiting_follows_stage_and_files(wd):
+    p = scripted()
+    w = ops.waiting(wd)
+    assert w["doing"] == "questions" and [x["state"] for x in w["steps"]] == ["done", "now", "todo"]
+    answered(wd, p)
+    assert ops.waiting(wd) is None
+    ops.confirm(wd, "agent-chat")
+    w = ops.waiting(wd)
+    assert w["doing"] == "design" and w["title"] == "エージェントが設計を作っています"
+    assert w["steps"][-1] == {"label": "設計の確認（あなた）", "state": "todo"}
+    design(wd, p, defaults())
+    assert ops.waiting(wd) is None
+    ops.confirm(wd, "human-ui")
+    w = ops.waiting(wd)
+    assert w["doing"] == "research" and [x["label"] for x in w["steps"]][1:4] == ["ウェブで調べる", "下書きを書く", "検査する"]
+    research(wd, p, wd.design())
+    assert ops.waiting(wd)["doing"] == "draft"
+    draft(wd, p, roles())
+    assert ops.waiting(wd)["doing"] == "check"
+    check(wd, p, None, "draft.md", VOTES)
+    w = ops.waiting(wd)
+    assert w["doing"] == "finish" and [x["state"] for x in w["steps"]] == ["done"] * 4 + ["now", "todo"]
+    ops.confirm(wd, "agent")
+    assert ops.waiting(wd) is None and ops.stage_info(wd)["waiting"] is None
+
+
+def test_waiting_skips_research_without_topics(wd):
+    p = scripted()
+    answered(wd, p)
+    ops.confirm(wd, "agent-chat")
+    design(wd, p, defaults())
+    ops.update_design(wd, {"research": []}, "human-ui")
+    ops.confirm(wd, "human-ui")
+    w = ops.waiting(wd)
+    assert w["doing"] == "draft" and "ウェブで調べる" not in [x["label"] for x in w["steps"]]
+    wd.save_design(wd.design().model_copy(update={"research": ["exiftool の書式"]}))
+    draft(wd, p, roles())
+    assert ops.waiting(wd)["doing"] == "check" and ops.waiting(wd)["steps"][1] == {"label": "ウェブで調べる", "state": "done"}
+
+
+def test_server_reports_waiting_in_version(wd):
+    p = scripted()
+    answered(wd, p)
+    ops.confirm(wd, "agent-chat")
+    with serving(wd) as c:
+        code, v = c.get("/api/version")
+        assert code == 200 and v["waiting"]["doing"] == "design"
+        design(wd, p, defaults())
+        code, v2 = c.get("/api/version")
+        assert v2["waiting"] is None and v2["version"] != v["version"]
+
+
+def test_conflict_notes_lose_unit_refs_and_show_lists_causes(wd):
+    p = scripted()
+    answered(wd, p)
+    d = design(wd, p, defaults())
+    d = parse_review({"conflicts": [{"id": "m3", "level": "partial", "by": ["m12", "m3"], "note": "m12 のコマンドの書式"}]}, d)
+    assert [(c.id, c.by, c.note) for c in d.conflicts] == [("m3", ["m12"], "コマンドの書式")]
+    wd.save_design(d)
+    ops.set_stage(wd, "design")
+    snap = snapshot(wd)
+    c = snap["design"]["conflicts"][0]
+    assert c["note"] == "コマンドの書式" and [r["id"] for r in c["refs"]] == ["m12"] and c["refs"][0]["text"]
+    out = show_text(snap)
+    assert "警告: 「コマンドの書式」が一部出る（書かない側: m3）" in out and "    原因: m12「" in out
+
+
+def test_show_puts_question_first_and_refs_compact(wd):
+    p = scripted()
+    mark(wd, p, p)
+    interview(wd, p, always_ask())
+    out = show_text(snapshot(wd))
+    lines = out.splitlines()
+    i = lines.index("q1. LINE で受け取った写真だけ EXIF が消えていると気づいたとき、何を考えましたか")
+    assert lines[i + 1].startswith("    背景: LINE 経由") and lines[i + 2].startswith("    参考: m4「")

@@ -57,13 +57,13 @@ def designed(root: Path) -> WorkDir:
 
 
 def test_always_ask_is_added_once(cwd):
-    write_user({"interview": {"always_ask": ["m4 の LINE の写真で、EXIF が消えていると気づいたときに何を考えましたか",
+    write_user({"interview": {"always_ask": ["LINE で受け取った写真だけ EXIF が消えていると気づいたとき、何を考えましたか",
                                              "一番の驚きは？"]}})
     p = scripted()
     w, _ = init_workdir(cwd / "w", PROJECT, [SAMPLES / "notes.md"])
     mark(w, p, p)
     qs = interview(w, p, always_ask()).questions
-    assert [q.question for q in qs].count("m4 の LINE の写真で、EXIF が消えていると気づいたときに何を考えましたか") == 1
+    assert [q.question for q in qs].count("LINE で受け取った写真だけ EXIF が消えていると気づいたとき、何を考えましたか") == 1
     assert qs[-1].question == "一番の驚きは？" and qs[-1].id == f"q{len(qs)}"
 
 

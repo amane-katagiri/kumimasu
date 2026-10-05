@@ -52,6 +52,7 @@ class Unit(BaseModel):
 class Question(BaseModel):
     id: str
     question: str
+    context: str = ""
     why: str = ""
     units: list[str] = []
     answer: str = ""
@@ -83,8 +84,9 @@ class Conflict(BaseModel):
     note: str = ""
 
     def message(self) -> str:
-        how = "出ます" if self.level == "yes" else "一部出ます"
-        return f"{self.id} は書かないにしたが、{'・'.join(self.by)} を載せると{how}" + (f"（{self.note}）" if self.note else "")
+        how = "出る" if self.level == "yes" else "一部出る"
+        what = f"「{self.note}」" if self.note else "書かないにした内容"
+        return f"{what}が{how}（原因: {'・'.join(self.by)} / 書かない側: {self.id}）"
 
 
 class Skip(BaseModel):
@@ -123,6 +125,9 @@ class Design(BaseModel):
 
     def aside_ids(self) -> set[str]:
         return {a.id for a in self.aside}
+
+    def unit_ids(self) -> list[str]:
+        return [u.id for u in self.units]
 
     def use_of(self, unit_id: str) -> Use | None:
         return next((u.use for u in self.units if u.id == unit_id), None)

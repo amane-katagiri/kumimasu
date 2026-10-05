@@ -94,7 +94,7 @@ def interview(path: DirArg, provider: ProviderOpt = None,
     with errors():
         iv = run_interview(wd, cc.llm(cfg, "interviewer", provider), cfg.get("interview.always_ask") or [], overwrite)
     for q in iv.questions:
-        typer.echo(f"{q.id}. {q.question}")
+        typer.echo(f"{q.id}. {q.question}" + (f"\n    参考: {', '.join(q.units)}" if q.units else ""))
     typer.echo(f"\nanswer in {wd.interview_file} or with `kumimasu serve {path}`")
 
 

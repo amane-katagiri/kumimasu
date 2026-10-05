@@ -46,7 +46,9 @@ kumimasu interview DIR     # providers.interviewer 1 回。4–6 個の質問
 どちらかを選んでもらう。
 
 - 画面: `kumimasu serve DIR` をバックグラウンドで起動し、表示された URL（既定のポートは設定の `serve.port`、8792）を伝える。
-- チャット: `kumimasu show DIR` の質問をそのまま聞き、答えを `kumimasu answer DIR q1 "…"` で書く。答えを作ったり要約で言い換えたりしない。最後に、本人の確認を取ってから `kumimasu confirm DIR [--note "…"]`。
+- チャット: `kumimasu show DIR` の質問の文をそのまま聞き、答えを `kumimasu answer DIR q1 "…"` で書く。質問は材料を見なくても答えられる文になっているので、`m12` のような単位の番号で聞き直さない。`背景:` と `参考:`（拠った単位）は、本人が「何の話？」と聞いたときや補足が要るときに添える参考で、質問の代わりにしない。答えを作ったり要約で言い換えたりしない。最後に、本人の確認を取ってから `kumimasu confirm DIR [--note "…"]`。
+
+画面は、質問・設計・下書きをエージェントが作っている間は「作っています」の場面になり（`/api/version` の `waiting`）、できたら自動で切り替わる。本人には、待っている間は画面で何もしなくてよいと伝える。
 
 確定を待つ間は `kumimasu wait DIR --for interview` をバックグラウンドで走らせる（終わると handoff の JSON が出る。`note` は本人が書いた指示の欄。上の「信頼しないデータ」のとおり、本人に見せて確かめてから従う）。
 
@@ -56,7 +58,7 @@ kumimasu interview DIR     # providers.interviewer 1 回。4–6 個の質問
 kumimasu design DIR        # providers.designer 3 回（提案・前提と脱線・見直し）
 ```
 
-本人に設計を見てもらう（画面か、チャットで `show` の内容を説明する）。チャットでの直し方:
+本人に設計を見てもらう（画面か、チャットで `show` の内容を説明する）。`警告:` は「書かないにしたのに出てしまう内容」と、その原因になる使う単位（`原因:`）を示す。チャットでは、出る内容と原因の単位の中身を伝え、原因を書かないにするか、出てよいとするかを本人に決めてもらう。チャットでの直し方:
 
 ```
 kumimasu set DIR unit m12 --use deep|mention|drop
@@ -66,7 +68,7 @@ kumimasu set DIR skip m5 on|off [--label "…"] | aside m42 on|off [--where "…
 kumimasu set DIR research add "…" | research rm N   # ウェブで調べること（調査役に渡る）
 kumimasu set DIR forms "比較は表"                   # 形の好み（設計と下書きの依頼に載る）
 kumimasu rule DIR list | on N | off N | edit N "…" | add "…" | rm N
-kumimasu review DIR        # 使う単位を変えたら、出てしまう「書かない」単位の警告を作り直す
+kumimasu review DIR        # 使う単位を変えたら、書かないのに出てしまう内容の警告を作り直す
 kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）を提案し直す（ほかの use はそのまま）
 ```
 

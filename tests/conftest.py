@@ -179,7 +179,8 @@ def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_
                                          for i in ids]})
         if "質問を" in prompt:
             return json.dumps({"questions": [
-                {"question": "m4 の LINE の写真で、EXIF が消えていると気づいたときに何を考えましたか", "why": "deep の候補",
+                {"question": "[m4] の件で、LINE で受け取った写真だけ EXIF が消えていると気づいたとき、何を考えましたか",
+                 "context": "LINE 経由の写真は EXIF が消えていて、更新日時で代用した（m4）", "why": "deep の候補",
                  "units": ["m4", "m99"]},
                 {"question": "読者に 1 つだけ持ち帰ってもらうなら何ですか", "why": "持ち帰り", "units": []},
                 {"question": "", "why": "", "units": []}]})

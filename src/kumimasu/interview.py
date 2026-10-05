@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -40,17 +41,21 @@ INTERVIEW_PROMPT_JA = DATA_NOTE_JA + """
 記事を書く前に著者に聞く質問を {n_min}–{n_max} 個作ってください。目的は、材料からは推測できない著者の視点を引き出すことです。何を記事に入れ、何を落とし、どこを掘り下げ、読者に何を持ち帰ってもらうかを決める手がかりになる質問にします。
 
 質問の決まり:
-- 短く、具体的に。材料の具体的な単位（番号）や事柄を名指しします。「この記事で伝えたいことは何ですか」のような一般的な質問はしません。
+- 著者は材料の一覧を見ずに、質問だけを読んで答えます。だから question は、それだけで意味が通る独立した文にします。材料のどの事柄を聞くのかを、何が起きたか・何が書いてあるかを短く言い換えて、質問の文の中に書きます（例:「LINE で受け取った写真だけ撮影日時が無かったとき、何を考えましたか」）。
+- question に単位の番号（m12・[m38]・q1 など）を書きません。「m38 の件は」「このメモの」のように、材料を見ないと分からない言い方もしません。
+- context には、その質問が拠っている材料の中身を、番号を使わずに 1 文（60 字以内）でまとめます。材料に拠らない質問なら空にします。
+- units には質問が拠っている単位の番号を入れます（無ければ空）。著者は必要なときだけ、これを参考として開きます。
+- 短く、具体的に。「この記事で伝えたいことは何ですか」のような一般的な質問はしません。
 - 1 つの質問では 1 つのことだけを聞きます。
 - 次のような質問を、材料に合うものから選んで作ります（全部を使う必要はありません）。
-  - 手元だけの単位について、そこで驚いたこと・引っかかったこと・予想と違ったこと
+  - 手元だけの事柄について、そこで驚いたこと・引っかかったこと・予想と違ったこと
   - 読者に 1 つだけ持ち帰ってもらうなら何か
   - 一般的な記事がどれも説明している事柄（検索で届く単位）を、この記事でも説明したいか
-  - 手元だけの単位のうち、いちばん大事なのはどれか
+  - 手元だけの事柄のうち、いちばん大事なのはどれか
   - あえて書かないと決めていることはあるか
   - なぜこれを作った・調べたのか（動機が材料に無いとき）
 - 著者の答えを先回りして書いたり、答えの候補を並べたりしません。
-- why には、その質問の答えが記事の設計のどこに効くかを 1 文で書きます。units には質問が指す単位の番号を入れます（無ければ空）。
+- why には、その質問の答えが記事の設計のどこに効くかを 1 文で書きます。
 
 # 材料
 
@@ -58,7 +63,7 @@ INTERVIEW_PROMPT_JA = DATA_NOTE_JA + """
 
 
 def interview_schema(n_max: int) -> dict:
-    return obj(questions=arr(obj(question=STR, why=STR, units=arr(STR)), n_max))
+    return obj(questions=arr(obj(question=STR, context=STR, why=STR, units=arr(STR)), n_max))
 
 
 def interview_prompt(p: Project, units: list[Unit], n_min: int = QUESTIONS_MIN, n_max: int = QUESTIONS_MAX) -> str:
@@ -66,14 +71,33 @@ def interview_prompt(p: Project, units: list[Unit], n_min: int = QUESTIONS_MIN, 
                                       units=unit_lines(units))
 
 
+UNIT_ID = re.compile(r"[mq]\d+")
+_REF_LIST = r"[mq]\d+(?:\s*[,、，・と/]\s*[mq]\d+)*"
+_BRACKETED = re.compile(rf"\s*[\[［(（【]\s*(?:単位\s*)?{_REF_LIST}\s*[\]］)）】]")
+_LEADING = re.compile(rf"(^|[。！？!?]\s*)[\[［(（【]?\s*(?:単位\s*)?{_REF_LIST}\s*[\]］)）】]?\s*(?:の(?:件|単位|材料|メモ|話|内容|ところ))?"
+                      r"\s*(?:について(?:は|で)?|では|は|で|の|に|、|,|:|：)?\s*")
+_BARE = re.compile(rf"(?<![A-Za-z0-9_]){_REF_LIST}(?![A-Za-z0-9_])\s*")
+
+
+def strip_unit_refs(text: str, ids: set[str]) -> str:
+    """The author answers without the notes open, so a reference like [m38] in a question says nothing to them."""
+    def drop(keep: str = ""):
+        return lambda m: keep.format(*m.groups()) if set(UNIT_ID.findall(m[0])) <= ids else m[0]
+    text = _LEADING.sub(drop("{0}"), text)
+    text = _BRACKETED.sub(drop(), text)
+    text = _BARE.sub(drop(), text)
+    return re.sub(r"[ \t]{2,}", " ", text).lstrip(" \t、,。").rstrip(" \t、,")
+
+
 def parse_questions(data: dict, units: list[Unit], n_max: int = QUESTIONS_MAX) -> Interview:
     ids = {u.id for u in units}
     qs = []
     for row in rows(data, "questions")[:n_max]:
-        text = str(row.get("question", "")).strip()
+        text = strip_unit_refs(str(row.get("question", "")), ids)
         if text:
-            qs.append(Question(id=f"q{len(qs) + 1}", question=text, why=str(row.get("why", "")).strip(),
-                               units=[u for u in row.get("units", []) if u in ids]))
+            refs = [u for u in row.get("units", []) if u in ids]
+            qs.append(Question(id=f"q{len(qs) + 1}", question=text, context=strip_unit_refs(str(row.get("context", "")), ids),
+                               why=strip_unit_refs(str(row.get("why", "")), ids), units=list(dict.fromkeys(refs))))
     return Interview(questions=qs)
 
 

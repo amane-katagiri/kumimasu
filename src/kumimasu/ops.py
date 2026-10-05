@@ -8,11 +8,13 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from .check import check_stem
 from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
 from .draft import read_used
 from .errors import StepError
 from .files import append_jsonl, atomic_write, read_jsonl
 from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, Unit, UnitUse
+from .research import research_name
 from .review import (
     ApplyResult,
     Review,
@@ -267,7 +269,7 @@ def restart(wd: WorkDir, from_stage: str, source: str) -> int:
 
 
 VERSIONED = ("project.yaml", "units.yaml", "interview.yaml", "keep.yaml", HANDOFF)
-VERSIONED_GLOBS = ("design*.yaml", "review.*.yaml", "draft*.md", "draft*.json", "check*.json")
+VERSIONED_GLOBS = ("design*.yaml", "review.*.yaml", "draft*.md", "draft*.json", "check*.json", "research*.json")
 
 
 def version(wd: WorkDir) -> str:
@@ -286,4 +288,51 @@ def stage_info(wd: WorkDir) -> dict:
     rows = handoffs(wd)
     return {"stage": p.stage, "round": p.round, "stages": list(STAGES), "labels": STAGE_LABEL,
             "draft": wd.review_draft(), "handoff": find_handoff(wd, p.stage, rows) if p.stage == "done" else None,
-            "last_handoff": rows[-1] if rows else None}
+            "last_handoff": rows[-1] if rows else None, "waiting": waiting(wd)}
+
+
+AFTER = "終わると自動で次の画面に切り替わります。この間は編集できません。"
+WORK = {
+    "questions": ("質問を作る", "エージェントが質問を作っています",
+                  "材料を読んで、材料からは分からないあなたの視点を聞く質問を作っています。"),
+    "design": ("設計を提案する", "エージェントが設計を作っています",
+               ("インタビューの答えと材料から、何を掘り下げ・何に触れ・何を書かないか、説明しない前提と脱線、"
+                "書かない話題を提案しています。")),
+    "research": ("ウェブで調べる", "エージェントがウェブで調べています",
+                 "設計の「ウェブで調べること」だけを調査役に渡して、出典付きの事実を集めています（材料と回答は渡しません）。"),
+    "draft": ("下書きを書く", "エージェントが下書きを書いています",
+              "設計・使う材料・調査結果を 1 回の依頼で渡して、記事を通しで書かせています。"),
+    "check": ("検査する", "エージェントが下書きを検査しています",
+              "設計に照らして下書きを確かめています（書かない単位が出ていないか、掘り下げる単位が厚いか、作り話が無いか、など）。"),
+    "finish": ("仕上げて渡す", "エージェントが仕上げています",
+               "検査の結果を見て、構造の検査が落ちていれば 1 回だけ書き直し、最終チェックに渡します。"),
+}
+HUMAN_STEP = {"interview": "インタビュー（あなた）", "design": "設計の確認（あなた）", "review": "最終チェック（あなた）"}
+
+
+def _scene(first: str, work: list[tuple[str, bool]], human: str) -> dict | None:
+    reached = max((i for i, (_, done) in enumerate(work) if done), default=-1) + 1
+    if reached == len(work):
+        return None
+    states = ["done"] * reached + ["now"] + ["todo"] * (len(work) - reached - 1)
+    steps = [{"label": first, "state": "done"}, *({"label": WORK[k][0], "state": st} for (k, _), st in zip(work, states)),
+             {"label": human, "state": "todo"}]
+    current = work[reached][0]
+    _, title, detail = WORK[current]
+    return {"doing": current, "title": title, "detail": detail, "next": AFTER, "steps": steps}
+
+
+def waiting(wd: WorkDir) -> dict | None:
+    match wd.project().stage:
+        case "interview":
+            return _scene("材料を単位に分ける", [("questions", wd.interview_file.exists())], HUMAN_STEP["interview"])
+        case "design":
+            return _scene("インタビューを確定", [("design", wd.design_file.exists())], HUMAN_STEP["design"])
+        case "drafting":
+            base = wd.draft_base()
+            has_research = wd.design_file.exists() and bool(wd.design().research)
+            work = [("research", (wd.root / research_name(wd)).is_file())] if has_research else []
+            work += [("draft", wd.is_plain_file(base)), ("check", (wd.root / f"{check_stem(base)}.json").is_file()),
+                     ("finish", False)]
+            return _scene("設計を確定", work, HUMAN_STEP["review"])
+    return None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from . import ops
 from .design import sync_design
-from .model import USE_LABEL
+from .model import USE_LABEL, Unit
 from .review import DECISION_LABEL, ReviewContext, final_name
 from .textutil import excerpt
 from .workdir import WorkDir
@@ -15,10 +15,15 @@ NEXT_STEP = {
     "done": "完了。handoff.json の final が確定した記事",
 }
 SHORT = 70
+REF_SHORT = 36
 
 
 def _short(text: str, n: int = SHORT) -> str:
     return excerpt(text, n, ellipsis=True)
+
+
+def _refs(ids: list[str], by: dict[str, Unit]) -> list[dict]:
+    return [{"id": i, "text": _short(by[i].text, REF_SHORT)} for i in ids if i in by]
 
 
 def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
@@ -27,8 +32,9 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
     snap: dict = {"topic": p.topic, "stage": p.stage, "round": p.round, "next": NEXT_STEP[p.stage], "showing": part,
                   "last_handoff": (ops.handoffs(wd) or [None])[-1]}
     if part == "interview" and wd.interview_file.exists():
-        snap["interview"] = [{"id": q.id, "question": q.question, "answer": q.answer, "source": q.source}
-                             for q in wd.interview().questions]
+        by = {u.id: u for u in wd.units()}
+        snap["interview"] = [{"id": q.id, "question": q.question, "context": q.context, "answer": q.answer,
+                              "source": q.source, "refs": _refs(q.units, by)} for q in wd.interview().questions]
     elif part in ("design", "drafting") and wd.design_file.exists():
         units = wd.units()
         d = sync_design(wd.design(), units)
@@ -40,7 +46,7 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
                             for u in d.units if u.use == use and u.id in by] for use in ("deep", "mention", "drop")},
             "skip": [s.model_dump() for s in d.skip], "aside": [a.model_dump() for a in d.aside],
             "rules": [{"n": i, "on": r.on, "text": r.text} for i, r in enumerate(d.rules, 1)],
-            "warnings": [c.message() for c in d.live_conflicts()]}
+            "conflicts": [c.model_dump() | {"refs": _refs(c.by, by)} for c in d.live_conflicts()]}
     elif part in ("review", "done"):
         base = wd.review_draft()
         if wd.is_plain_file(base):
@@ -57,12 +63,20 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
     return snap
 
 
+def _ref_text(r: dict) -> str:
+    return f"{r['id']}「{r['text']}」"
+
+
 def text(snap: dict) -> str:
     lines = [f"{snap['topic']}", f"段階: {ops.STAGE_LABEL[snap['stage']]}（ラウンド {snap['round']}）  次: {snap['next']}"]
     if iv := snap.get("interview"):
         lines.append("\n[インタビュー]")
         for q in iv:
             lines.append(f"{q['id']}. {q['question']}")
+            if q["context"]:
+                lines.append(f"    背景: {q['context']}")
+            if q["refs"]:
+                lines.append("    参考: " + " / ".join(_ref_text(r) for r in q["refs"]))
             lines.append(f"    答え: {q['answer'] or '（未回答）'}" + (f"  [{q['source']}]" if q["source"] else ""))
     if d := snap.get("design"):
         lines.append(f"\n[設計 {d['file']}]")
@@ -75,7 +89,10 @@ def text(snap: dict) -> str:
                          + (" …" if len(us) > 12 else ""))
         lines += [f"説明しない前提: {s['label']} ({', '.join(s['units'])})" for s in d["skip"]]
         lines += [f"脱線: {a['id']} @ {a['where']}" for a in d["aside"]]
-        lines += [f"警告: {w}" for w in d["warnings"]]
+        for c in d["conflicts"]:
+            how = "出る" if c["level"] == "yes" else "一部出る"
+            lines.append(f"警告: 「{c['note'] or '書かないにした内容'}」が{how}（書かない側: {c['id']}）")
+            lines.append("    原因: " + " / ".join(_ref_text(r) for r in c["refs"]))
         if d["avoid"]:
             lines.append("書かない話題: " + " / ".join(d["avoid"]))
         lines += [f"調べること {i}: {t}" for i, t in enumerate(d["research"], 1)]
