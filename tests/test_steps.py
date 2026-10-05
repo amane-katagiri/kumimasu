@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import threading
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -23,8 +21,9 @@ from kumimasu.mark import mark
 from kumimasu.model import Design, Project, UnitUse
 from kumimasu.polish import Flag, apply_replacements, blocks, neighborhood, polish
 from kumimasu.revise import instructions, revise
-from kumimasu.server import WriteApp, make_server
 from kumimasu.workdir import StepError, WorkDir, init_workdir
+
+from conftest import serving
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLES = ROOT / "tests" / "samples"
@@ -538,67 +537,48 @@ def test_revise_does_nothing_without_failures(wd):
     assert rep is None and todo == [] and not (wd.root / "draft.v2.md").exists()
 
 
-def _req(url: str, method: str = "GET", body: dict | None = None):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status, r.read().decode()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
-
-
 def test_server_state_answers_and_design(wd):
     p = scripted()
     mark(wd, p, p)
     interview(wd, p)
-    server = make_server(WriteApp(wd), 0)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-    try:
-        code, page = _req(base + "/")
+    with serving(wd) as c:
+        code, page = c.get("/")
         assert code == 200 and "インタビュー" in page
-        code, body = _req(base + "/api/state")
-        st = json.loads(body)
+        code, st = c.get("/api/state")
         assert st["design"] is None and st["interview"]["questions"][0]["id"] == "q1"
         assert st["units"][0]["firsthand"] is True and st["units"][1]["firsthand"] is False
-        code, body = _req(base + "/api/interview", "PUT", {"answers": {"q2": "EXIF の無い写真の扱い"}})
-        assert code == 200 and json.loads(body)["units"][-1]["id"] == "q2"
+        code, body = c.put("/api/interview", {"answers": {"q2": "EXIF の無い写真の扱い"}})
+        assert code == 200 and body["units"][-1]["id"] == "q2"
         assert wd.interview().questions[1].answer == "EXIF の無い写真の扱い"
-        code, _ = _req(base + "/api/design", "PUT", {"units": {"m1": "deep"}})
+        code, _ = c.put("/api/design", {"units": {"m1": "deep"}})
         assert code == 409
         design(wd, p)
         from kumimasu import ops
 
         ops.set_stage(wd, "design")
-        assert json.loads(_req(base + "/api/state")[1])["warnings"] == [wd.design().live_conflicts()[0].message()]
-        code, body = _req(base + "/api/design", "PUT", {"units": {"m1": "deep", "m12": "drop"}, "takeaways": ["a", " ", "b"],
-                                                         "target_length": 800, "avoid": ["価格の比較"]})
+        assert c.get("/api/state")[1]["warnings"] == [wd.design().live_conflicts()[0].message()]
+        code, body = c.put("/api/design", {"units": {"m1": "deep", "m12": "drop"}, "takeaways": ["a", " ", "b"],
+                                           "target_length": 800, "avoid": ["価格の比較"]})
         d = wd.design()
         assert code == 200 and d.use_of("m1") == "deep" and d.takeaways == ["a", "b"] and d.target_length == 800
-        assert d.avoid == ["価格の比較"] and json.loads(body)["warnings"] == []
-        assert json.loads(_req(base + "/api/state")[1])["units"][1]["members"] == ["m9"]
+        assert d.avoid == ["価格の比較"] and body["warnings"] == []
+        assert c.get("/api/state")[1]["units"][1]["members"] == ["m9"]
         rules = [{"text": r.text, "on": r.text != wd.design().rules[0].text} for r in wd.design().rules]
-        code, body = _req(base + "/api/design", "PUT", {"rules": rules + [{"text": "足したルール", "on": True}]})
-        st = json.loads(body)["design"]["rules"]
+        code, body = c.put("/api/design", {"rules": rules + [{"text": "足したルール", "on": True}]})
+        st = body["design"]["rules"]
         assert code == 200 and st[0]["on"] is False and st[-1] == {"text": "足したルール", "on": True}
         assert wd.design().rules[0].on is False and len(wd.design().rules) == len(rules) + 1
-        assert "書き方のルール" in _req(base + "/")[1]
-        code, _ = _req(base + "/api/design", "PUT", {"skip": [{"label": "命名規則", "units": ["m6"]}],
-                                                      "aside": [{"id": "m8", "where": "最初"}]})
+        assert "書き方のルール" in c.get("/")[1]
+        code, _ = c.put("/api/design", {"skip": [{"label": "命名規則", "units": ["m6"]}], "aside": [{"id": "m8", "where": "最初"}]})
         d = wd.design()
         assert code == 200 and d.use_of("m6") == "drop" and d.use_of("m8") == "mention"
-        _req(base + "/api/design", "PUT", {"units": {"m6": "mention", "m8": "drop"}})
+        c.put("/api/design", {"units": {"m6": "mention", "m8": "drop"}})
         d = wd.design()
         assert d.skip[0].units == [] and d.aside == [] and d.use_of("m6") == "mention"
         assert next(u for u in d.units if u.id == "m1").why == "手で変更"
-        code, _ = _req(base + "/api/design", "PUT", {"units": {"m1": "maybe"}})
+        code, _ = c.put("/api/design", {"units": {"m1": "maybe"}})
         assert code == 400
-        assert _req(base + "/api/nope")[0] == 404
-    finally:
-        server.shutdown()
-        server.server_close()
+        assert c.get("/api/nope")[0] == 404
 
 
 def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):

@@ -134,10 +134,16 @@ class WorkDir:
     def write_json(self, name: str, data) -> Path:
         return self.write(name, json.dumps(data, ensure_ascii=False, indent=1) + "\n")
 
+    def is_plain_file(self, name: str) -> bool:
+        path = self.root / name
+        return path.is_file() and not path.is_symlink() and path.resolve().parent == self.root.resolve()
+
     def read(self, name: str) -> str:
         path = self.root / name
+        if path.is_symlink():
+            raise StepError(f"{name} はシンボリックリンクなので読みません")
         if not path.exists():
-            raise StepError(f"{path} がありません")
+            raise StepError(f"{name} がありません")
         return path.read_text(encoding="utf-8")
 
 

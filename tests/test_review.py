@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -17,8 +14,9 @@ from kumimasu.check import Check, CheckReport, dash_hits, load_keep, surface_che
 from kumimasu.model import Project
 from kumimasu.polish import find_flags
 from kumimasu.review import apply_review, delete_spans, find_span, load_review, review_path, save_decisions
-from kumimasu.server import WriteApp, make_server
 from kumimasu.workdir import WorkDir, init_workdir
+
+from conftest import serving
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = Project(topic="縦書き", audience="個人サイトを作る人", length=600)
@@ -180,50 +178,46 @@ def test_apply_deletes_and_rewrites_with_one_call(wd):
     assert res2.calls == 0 and res2.rewritten == 0
 
 
-def _req(url: str, method: str = "GET", body: dict | None = None):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status, json.loads(r.read().decode() or "null") if "json" in r.headers.get("Content-Type", "") else r.read().decode()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
-
-
 def test_server_final_check_round_trip(wd):
     standard_report(wd)
     wd.write("draft.prompt.md", "x")
     rewriter = FakeProvider(lambda prompt: json.dumps({"items": []}))
-    server = make_server(WriteApp(wd, lambda: rewriter), 0)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-    try:
-        assert _req(base + "/api/drafts") == (200, {"drafts": [{"name": "draft.md", "final": None}]})
-        assert _req(base + "/api/final/draft.md")[0] == 404
-        assert _req(base + "/api/download/draft.md")[0] == 404
-        code, r = _req(base + "/api/review/draft.md")
+    with serving(wd, lambda: rewriter) as c:
+        assert c.get("/api/drafts") == (200, {"drafts": [{"name": "draft.md", "final": None}]})
+        assert c.get("/api/final/draft.md")[0] == 404
+        assert c.get("/api/download/draft.md")[0] == 404
+        code, r = c.get("/api/review/draft.md")
         assert code == 200 and 'data-s="' in r["html"] and len(r["items"]) == 6 and r["checked"]
         meta = next(i for i in r["items"] if i["kind"] == "meta")
-        code, r = _req(base + "/api/review/draft.md", "PUT", {"items": [{"id": meta["id"], "decision": "delete"}]})
+        code, r = c.put("/api/review/draft.md", {"items": [{"id": meta["id"], "decision": "delete"}]})
         assert code == 200 and next(i for i in r["items"] if i["id"] == meta["id"])["decision"] == "delete"
         assert yaml.safe_load(review_path(wd, "draft.md").read_text(encoding="utf-8"))["items"]
-        code, r = _req(base + "/api/apply/draft.md", "POST")
+        code, r = c.post("/api/apply/draft.md")
         assert code == 200 and r["out"] == "draft.final.md" and r["deleted"] == 1 and r["calls"] == 0
-        assert _req(base + "/api/drafts")[1]["drafts"] == [{"name": "draft.md", "final": "draft.final.md"}]
-        code, f = _req(base + "/api/final/draft.md")
+        assert c.get("/api/drafts")[1]["drafts"] == [{"name": "draft.md", "final": "draft.final.md"}]
+        code, f = c.get("/api/final/draft.md")
         assert code == 200 and f["final"] == "draft.final.md" and "見ていきます" not in f["markdown"] and "data-s" in f["html"]
-        with urllib.request.urlopen(base + "/api/download/draft.md") as resp:
-            assert resp.read().decode("utf-8") == f["markdown"]
-            disp = resp.headers["Content-Disposition"]
+        code, body, headers = c.request("/api/download/draft.md")
+        assert code == 200 and body == f["markdown"]
+        disp = headers["Content-Disposition"]
         assert disp.startswith("attachment; filename*=UTF-8''w-draft-") and disp.endswith(".md")
         for bad in ("draft.final.md", "draft.final.final.md"):
-            assert _req(base + f"/api/review/{bad}")[0] == 404 and _req(base + f"/api/apply/{bad}", "POST")[0] == 404
-        assert _req(base + "/api/review/draft.prompt.md")[0] == 404
-        assert _req(base + "/api/review/..%2Fproject.yaml")[0] == 404
-        assert "最終チェック" in _req(base + "/")[1]
-    finally:
-        server.shutdown()
-        server.server_close()
+            assert c.get(f"/api/review/{bad}")[0] == 404 and c.post(f"/api/apply/{bad}")[0] == 404
+        assert c.get("/api/review/draft.prompt.md")[0] == 404
+        assert c.get("/api/review/..%2Fproject.yaml")[0] == 404
+        assert "最終チェック" in c.get("/")[1]
+
+
+def test_server_refuses_symlinked_drafts(wd, tmp_path):
+    secret = tmp_path / "secret.md"
+    secret.write_text("秘密\n", encoding="utf-8")
+    (wd.root / "draft.link.md").symlink_to(secret)
+    (wd.root / "draft.final.md").symlink_to(secret)
+    with serving(wd) as c:
+        assert c.get("/api/review/draft.link.md")[0] == 404
+        assert c.get("/api/download/draft.md")[0] == 404
+        assert c.get("/api/final/draft.md")[0] == 404
+        assert c.get("/api/drafts")[1] == {"drafts": [{"name": "draft.md", "final": None}]}
 
 
 def test_cli_apply(wd, monkeypatch):

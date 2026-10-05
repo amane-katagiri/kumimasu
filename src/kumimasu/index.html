@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="kumimasu-token" content="{{KUMIMASU_TOKEN}}">
 <title>記事の設計</title>
 <style>
 :root {
@@ -213,12 +214,20 @@ const FILTERS = { all: "すべて", firsthand: "手元だけ・回答", searchab
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const linkify = (s) => esc(s).replace(/https?:\/\/[^\s)<>\]」』]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+const linkify = (s) => esc(s).replace(/https?:\/\/[^\s)<>\]」』]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
 
 function status(msg, err) { const n = $("#status"); n.textContent = msg; n.className = err ? "err" : ""; }
 
+const TOKEN = document.querySelector('meta[name="kumimasu-token"]').content;
+
+function request(path, opts = {}) {
+  const headers = { "X-Kumimasu-Token": TOKEN, ...(opts.headers || {}) };
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  return fetch(path, { ...opts, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
+}
+
 async function api(path, opts) {
-  const r = await fetch(path, opts);
+  const r = await request(path, opts);
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -264,7 +273,7 @@ function renderUnits() {
     row.className = "unit" + (use === "drop" ? " drop" : "");
     const same = u.members && u.members.length ? ` · 同じ内容: ${u.members.map(esc).join(", ")}` : "";
     const ctx = u.context ? `<div class="why">問い: ${esc(u.context)}</div>` : "";
-    row.innerHTML = `<div class="bar" style="--c: ${color}"></div><div><div class="head">${u.id} · ${tag}${where ? " · " + esc(where) : ""}${same}</div>${ctx}${body}</div>${seg}`;
+    row.innerHTML = `<div class="bar" style="--c: ${color}"></div><div><div class="head">${esc(u.id)} · ${esc(tag)}${where ? " · " + esc(where) : ""}${same}</div>${ctx}${body}</div>${seg}`;
     row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => setUse(u.id, b.dataset.use)));
     row.querySelector("button[data-noise=skip]")?.addEventListener("click", () => toggleSkip(u));
     row.querySelector("button[data-noise=aside]")?.addEventListener("click", () => toggleAside(u));
@@ -398,7 +407,7 @@ function debounce(key, fn) {
 async function save(path, body, rerender) {
   status("保存中…");
   try {
-    S.data = await api(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    S.data = await api(path, { method: "PUT", body });
     S.version = S.data.version;
     status("保存しました");
     if (rerender) { renderUnits(); renderDesign(); }
@@ -473,7 +482,7 @@ function busy() {
 
 async function poll() {
   try {
-    const r = await fetch("/api/version", { headers: { "If-None-Match": `"${S.version}"` } });
+    const r = await request("/api/version", { headers: { "If-None-Match": `"${S.version}"` } });
     if (r.status === 200) {
       const v = await r.json();
       if (v.version !== S.version && !busy()) await reload();
@@ -495,8 +504,7 @@ async function confirmStage() {
   try {
     if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
     status("確定中…");
-    const r = await api("/api/confirm", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: $("#confirm-note").value }) });
+    const r = await api("/api/confirm", { method: "POST", body: { note: $("#confirm-note").value } });
     $("#confirm-note").value = "";
     S.data = r; S.version = r.version;
     renderMeta(); renderUnits(); renderInterview(); renderDesign();
@@ -575,10 +583,11 @@ function renderResult() {
     <button id="fc-view">${FC.viewing ? "下書きに戻る" : "結果を見る"}</button>
     ${FC.lastApply ? `<button id="fc-diffbtn">差分</button>` : ""}
     <button id="fc-copy">コピー</button>
-    <a class="btn" id="fc-download" href="/api/download/${encodeURIComponent(FC.draft)}" download>ダウンロード</a>
+    <button id="fc-download">ダウンロード</button>
     <textarea id="fc-copybox" readonly hidden></textarea>`;
   $("#fc-view").addEventListener("click", toggleResult);
   $("#fc-copy").addEventListener("click", copyResult);
+  $("#fc-download").addEventListener("click", downloadResult);
   if (FC.lastApply) $("#fc-diffbtn").addEventListener("click", showDiff);
 }
 
@@ -593,6 +602,19 @@ async function toggleResult() {
   $("#fc-items").innerHTML = `<p class="note">反映の結果を表示しています。決定は元の下書きで変えます。</p>`;
   setApplyEnabled();
   renderResult();
+}
+
+async function downloadResult() {
+  try {
+    const r = await request(`/api/download/${encodeURIComponent(FC.draft)}`);
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const m = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get("Content-Disposition") || "");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = m ? decodeURIComponent(m[1]) : "final.md";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) { status("ダウンロードできません: " + e.message, true); }
 }
 
 async function copyResult() {
@@ -836,7 +858,7 @@ async function pushReview(repaint) {
   try {
     const body = { items: FC.items.map((i) => ({ id: i.id, decision: i.decision, note: i.note, start: i.start, end: i.end,
       ...(i.rewrite ? { result: i.rewrite.result } : {}), ...(i.regenerate ? { regenerate: true } : {}) })), remove: FC.removed || [] };
-    const r = await api(`/api/review/${encodeURIComponent(FC.draft)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await api(`/api/review/${encodeURIComponent(FC.draft)}`, { method: "PUT", body });
     FC.items = r.items; FC.dirty = r.dirty;
     FC.removed = [];
     setApplyEnabled();
@@ -850,7 +872,7 @@ async function applyFinal() {
   try {
     if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
     status("反映中…");
-    const r = await api(`/api/apply/${encodeURIComponent(FC.draft)}`, { method: "POST" });
+    const r = await api(`/api/apply/${encodeURIComponent(FC.draft)}`, { method: "POST", body: {} });
     const rv = await api(`/api/review/${encodeURIComponent(FC.draft)}`);
     FC.items = rv.items; FC.dirty = rv.dirty;
     paintFinal();

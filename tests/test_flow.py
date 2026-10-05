@@ -4,8 +4,6 @@ import json
 import shutil
 import threading
 import time
-import urllib.error
-import urllib.request
 
 import pytest
 import yaml
@@ -20,9 +18,9 @@ from kumimasu.design import design
 from kumimasu.draft import draft
 from kumimasu.interview import interview
 from kumimasu.mark import mark
-from kumimasu.server import WriteApp, make_server
 from kumimasu.workdir import WorkDir, init_workdir
 
+from conftest import serving
 from test_steps import PROJECT, SAMPLES, scripted
 
 
@@ -82,23 +80,13 @@ def test_page_and_cli_write_identical_files(tmp_path):
     b_root = tmp_path / "b"
     shutil.copytree(a.root, b_root)
     b = WorkDir(b_root)
-    server = make_server(WriteApp(a), 0)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-
-    def put(path, body):
-        req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="PUT",
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return json.loads(r.read())
-
-    try:
+    with serving(a) as c:
         rules = [r.model_dump() for r in a.design().rules]
         rules[0]["on"] = False
-        put("/api/design", {"units": {"m1": "deep"}})
-        put("/api/design", {"takeaways": a.design().takeaways})
-        put("/api/design", {"rules": rules})
-        put("/api/design", {"skip": ops.toggled_skip(a.design(), "m6", True, "命名の話")})
+        c.put("/api/design", {"units": {"m1": "deep"}})
+        c.put("/api/design", {"takeaways": a.design().takeaways})
+        c.put("/api/design", {"rules": rules})
+        c.put("/api/design", {"skip": ops.toggled_skip(a.design(), "m6", True, "命名の話")})
         run_cli("set", b.root, "unit", "m1", "--use", "deep")
         run_cli("set", b.root, "takeaway", "1", b.design().takeaways[0])
         run_cli("rule", b.root, "off", "1")
@@ -107,9 +95,6 @@ def test_page_and_cli_write_identical_files(tmp_path):
         hist_a = [h["source"] for h in ops.history(a) if h["op"] == "design"]
         hist_b = [h["source"] for h in ops.history(b) if h["op"] == "design"]
         assert set(hist_a) == {"human-ui"} and set(hist_b) == {"agent-chat"} and len(hist_a) == len(hist_b) == 4
-    finally:
-        server.shutdown()
-        server.server_close()
 
 
 def test_decisions_parity_and_provenance(tmp_path):
@@ -242,34 +227,42 @@ def test_restart_rounds(wd):
 
 
 def test_version_endpoint_etag_and_live_changes(wd):
-    server = make_server(WriteApp(wd), 0)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-    try:
-        with urllib.request.urlopen(base + "/api/version", timeout=5) as r:
-            v = json.loads(r.read())
-            assert r.headers["ETag"] == f'"{v["version"]}"' and v["stage"] == "interview"
-        req = urllib.request.Request(base + "/api/version", headers={"If-None-Match": f'"{v["version"]}"'})
-        with pytest.raises(urllib.error.HTTPError) as e:
-            urllib.request.urlopen(req, timeout=5)
-        assert e.value.code == 304
+    with serving(wd) as c:
+        code, v, headers = c.request("/api/version")
+        assert code == 200 and headers["ETag"] == f'"{v["version"]}"' and v["stage"] == "interview"
+        etag = {"If-None-Match": f'"{v["version"]}"'}
+        assert c.request("/api/version", headers=etag)[0] == 304
         time.sleep(0.01)
         run_cli("answer", wd.root, "q1", "CLI から")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            assert json.loads(r.read())["version"] != v["version"]
-        req = urllib.request.Request(base + "/api/confirm", data=b'{"note": "n"}', method="POST",
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            body = json.loads(r.read())
+        code, now = c.get("/api/version", headers=etag)
+        assert code == 200 and now["version"] != v["version"]
+        code, body = c.post("/api/confirm", {"note": "n"})
         assert body["handoff"]["source"] == "human-ui" and body["stage"]["stage"] == "design"
-        req = urllib.request.Request(base + "/api/interview", data=b'{"answers": {"q1": "x"}}', method="PUT",
-                                     headers={"Content-Type": "application/json"})
-        with pytest.raises(urllib.error.HTTPError) as e:
-            urllib.request.urlopen(req, timeout=5)
-        assert e.value.code == 409
-    finally:
-        server.shutdown()
-        server.server_close()
+        assert c.put("/api/interview", {"answers": {"q1": "x"}})[0] == 409
+
+
+def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):
+    with serving(wd) as c:
+        port = c.base.rsplit(":", 1)[1]
+        assert c.get("/api/state", token=None)[0] == 403
+        assert c.get("/api/state", token="wrong")[0] == 403
+        assert c.get("/api/state", headers={"Host": "evil.example"})[0] == 421
+        assert c.get("/", headers={"Host": f"evil.example:{port}"})[0] == 421
+        assert c.get("/api/state", headers={"Host": f"localhost:{port}"})[0] == 200
+        assert c.post("/api/confirm", {"note": "x"}, headers={"Origin": "https://evil.example"})[0] == 403
+        assert c.post("/api/confirm", headers={"Origin": f"http://localhost:{port}"})[0] != 403
+        assert c.request("/api/confirm", "POST", raw=b'{"note": "x"}', headers={"Content-Type": "text/plain"})[0] == 415
+        assert c.request("/api/confirm", "POST", raw=b"[1]")[0] == 400
+        assert c.request("/api/confirm", "POST", raw=b"{nope")[0] == 400
+        assert c.request("/api/confirm", "POST", raw=b"{}", headers={"Content-Length": "-1"})[0] == 400
+        assert c.request("/api/confirm", "POST", raw=b"{}", headers={"Content-Length": str(2 * 1024 * 1024 + 1)})[0] == 413
+        assert ops.stage(wd) == "design"
+        code, page, headers = c.request("/", token=None)
+        assert code == 200 and "test-token" in page and headers["X-Frame-Options"] == "DENY"
+        assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+        assert headers["X-Content-Type-Options"] == "nosniff" and headers["Referrer-Policy"] == "no-referrer"
+        code, body = c.get("/api/review/draft.md")
+        assert code == 404 and str(wd.root) not in json.dumps(body, ensure_ascii=False)
 
 
 def test_cli_auto_prints_warning(wd, monkeypatch):

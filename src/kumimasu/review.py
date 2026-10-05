@@ -429,7 +429,8 @@ def needs_apply(wd: WorkDir, base: str) -> bool:
 
 
 def base_drafts(wd: WorkDir) -> list[str]:
-    return sorted(p.name for p in wd.root.glob("draft*.md") if not p.name.endswith(".prompt.md") and not is_final(p.name))
+    return sorted(p.name for p in wd.root.glob("draft*.md")
+                  if not p.name.endswith(".prompt.md") and not is_final(p.name) and wd.is_plain_file(p.name))
 
 
 def require_base(name: str) -> None:
