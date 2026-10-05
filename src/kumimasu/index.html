@@ -701,7 +701,7 @@ function renderAll() {
   const p = S.data.project;
   $("#topic").textContent = p.topic;
   document.title = "記事を書く: " + p.topic;
-  $("#meta").innerHTML = [`読者 ${p.audience}`, `種類 ${p.kind}`, `目標 ${p.length} 字`, `材料 ${S.data.units.length} 単位`, `ラウンド ${S.data.stage.round}`].map((x) => `<span>${esc(x)}</span>`).join("");
+  $("#meta").innerHTML = [`読者 ${p.audience}`, `種類 ${p.kind}`, `目標 ${S.data.design ? S.data.design.target_length : p.length} 字`, `材料 ${S.data.units.length} 単位`, `ラウンド ${S.data.stage.round}`].map((x) => `<span>${esc(x)}</span>`).join("");
   renderUnits(); renderInterview(); renderDesign(); renderDigest();
 }
 
