@@ -254,7 +254,8 @@ def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
     else:
         result = x.get("result")
         if result is not None and (it.rewrite is None or str(result) != it.rewrite.result):
-            it.rewrite = Rewrite(result=str(result).strip(), source="user", made_from=current_text(it, src), note=it.note)
+            it.rewrite = Rewrite(result=strip_block_marks(src, it.start, str(result).strip()), source="user",
+                                 made_from=current_text(it, src), note=it.note)
     if source and (it.decision, it.note, it.rewrite) != before:
         it.source = source
 
@@ -269,11 +270,22 @@ REWRITE_PROMPT_JA = DATA_NOTE_JA + """
 
 - 著者のメモがあれば、それに従います。
 - 段落・見出し・表・コードの構成は変えません。文の数も、メモが求めない限り増やしません。
+- 「直す文」に無い見出しの # や箇条書きの記号は付けず、置き換える文そのものだけを返します。
 - 情報は足しません。
 
 {{"items": [{{"id": "…", "replacement": "…"}}]}} の形の JSON で、すべての項目に答えてください。
 
 {items}"""
+
+
+_BLOCK_MARK = re.compile(r"^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+")
+
+
+def strip_block_marks(src: str, start: int | None, text: str) -> str:
+    if start is None:
+        return text
+    line_head = src[src.rfind("\n", 0, start) + 1:start]
+    return _BLOCK_MARK.sub("", text, count=1).lstrip() if line_head.strip() and _BLOCK_MARK.fullmatch(line_head) else text
 
 
 def rewrite_prompt(src: str, items: list[Item]) -> str:
@@ -413,7 +425,8 @@ def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate:
         calls = 1
         for it in fresh:
             if it.id in got:
-                it.rewrite = Rewrite(result=got[it.id], source="llm", made_from=current_text(it, src), note=it.note)
+                it.rewrite = Rewrite(result=strip_block_marks(src, it.start, got[it.id]), source="llm",
+                                     made_from=current_text(it, src), note=it.note)
                 mark_flags(it, src)
         save_review(wd, rev)
     elif regenerate:

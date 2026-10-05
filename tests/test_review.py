@@ -415,3 +415,15 @@ def test_needs_apply_tracks_decisions_since_last_apply(wd):
     assert needs_apply(wd, "draft.md")
     save_decisions(wd, "draft.md", {"items": [{"id": meta.id, "decision": "delete"}]})
     assert not needs_apply(wd, "draft.md")
+
+
+@pytest.mark.parametrize(("src", "span", "reply", "want"), [
+    ("# 題\n\n## 古い見出し\n\n本文。\n", "古い見出し", "## 新しい見出し", "新しい見出し"),
+    ("- 古い項目\n", "古い項目", "- 新しい項目", "新しい項目"),
+    ("1. 古い手順\n", "古い手順", "1. 新しい手順", "新しい手順"),
+    ("本文の文です。続きです。\n", "続きです。", "- 箇条書きっぽい返事", "- 箇条書きっぽい返事"),
+])
+def test_rewrite_results_do_not_repeat_block_marks(src, span, reply, want):
+    from kumimasu.review import strip_block_marks
+
+    assert strip_block_marks(src, src.index(span), reply) == want
