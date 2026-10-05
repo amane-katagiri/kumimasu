@@ -252,7 +252,7 @@ RESTART_FROM = ("interview", "design", "drafting")
 
 def restart(wd: WorkDir, from_stage: str, source: str) -> int:
     if from_stage not in RESTART_FROM:
-        raise ValueError(f"--from must be one of {', '.join(RESTART_FROM)}")
+        raise ValueError(f"--from は {', '.join(RESTART_FROM)} のどれかにしてください")
     with LOCK:
         p = wd.project()
         old_design = wd.design_file

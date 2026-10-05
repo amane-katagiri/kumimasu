@@ -106,11 +106,12 @@ def auto_review(wd: WorkDir, provider: Provider, rewriter: Callable[[], Provider
         if grams and traceable(it.text, grams):
             decided[it.id] = "keep"
     ask = [i for i in todo if i.id not in decided]
+    asked = {i.id for i in ask}
     if ask:
         prompt = AUTO_REVIEW_PROMPT_JA.format(items="\n".join(f"[{i.id}]（{i.category}）{i.text}" for i in ask))
         for row in rows(ask_json(provider, prompt, auto_review_schema()), "items"):
             iid = str(row.get("id"))
-            if iid in {i.id for i in ask} and iid not in decided:
+            if iid in asked and iid not in decided:
                 decided[iid] = "delete" if row.get("decision") == "delete" else "keep"
     if decided:
         ops.decide(wd, base, {"items": [{"id": k, "decision": v} for k, v in decided.items()]}, SOURCE)

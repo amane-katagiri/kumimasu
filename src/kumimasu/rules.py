@@ -25,7 +25,7 @@ def parse_rules(text: str, where: str) -> list[Rule]:
                 break
         else:
             return out
-    raise ValueError(f"{where}: rules must be a YAML list of strings (or {{text, on}})")
+    raise ValueError(f"{where}: ルールは文字列（または {{text, on}}）の YAML のリストにしてください")
 
 
 def dump_rules(rules: list[Rule]) -> str:

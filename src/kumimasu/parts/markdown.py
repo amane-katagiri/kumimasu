@@ -101,7 +101,7 @@ class _Builder:
         if ty == "hr":
             self.i += 1
             return _block("rule", tok, self.lines, text=tok.markup)
-        raise ValueError(f"unexpected token {ty}")
+        raise ValueError(f"想定していない Markdown のトークンです: {ty}")
 
     def table(self) -> Part:
         part = _block("table", self.t[self.i], self.lines)

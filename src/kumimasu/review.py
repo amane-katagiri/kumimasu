@@ -126,7 +126,7 @@ def load_reports(wd: WorkDir, draft: str) -> list[CheckReport]:
     return [r for r in (fresh_report(wd, draft, surface) for surface in (False, True)) if r is not None]
 
 
-def review_path(wd: WorkDir, draft: str):
+def review_path(wd: WorkDir, draft: str) -> Path:
     return wd.root / f"review.{draft.removesuffix('.md')}.yaml"
 
 

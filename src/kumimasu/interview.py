@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from .errors import StepError
@@ -17,7 +18,8 @@ QUESTIONS_MIN = 4
 QUESTIONS_MAX = 6
 
 
-def unit_lines(units: list[Unit], with_mark: bool = True, with_context: bool = False) -> str:
+def unit_lines(units: list[Unit], with_mark: bool = True, with_context: bool = False,
+               note: Callable[[Unit], str] | None = None) -> str:
     out = []
     for u in units:
         text = u.text if len(u.text) <= UNIT_SHOWN * (1 + len(u.members)) else u.text[:UNIT_SHOWN * (1 + len(u.members))] + "…"
@@ -27,7 +29,7 @@ def unit_lines(units: list[Unit], with_mark: bool = True, with_context: bool = F
             tag = f"（{SEARCHABLE_LABEL[u.searchable]}）" if with_mark else ""
         kind = "コード" if u.kind == "code" else ""
         body = f"```\n{text}\n```" if u.kind == "code" else text
-        out.append(f"[{u.id}]{tag}{kind}\n{body}")
+        out.append(f"[{u.id}]{note(u) if note else ''}{tag}{kind}\n{body}")
     return "\n\n".join(out)
 
 

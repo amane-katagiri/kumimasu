@@ -39,7 +39,7 @@ def extract_json(text: str) -> Any:
         return json.loads(m[1])
     start = min((i for i in (text.find("{"), text.find("[")) if i >= 0), default=-1)
     if start < 0:
-        raise ValueError(f"no JSON found in: {text[:120]!r}")
+        raise ValueError(f"JSON が見つかりません: {text[:120]!r}")
     depth = 0
     opener = text[start]
     closer = "}" if opener == "{" else "]"
@@ -59,7 +59,7 @@ def extract_json(text: str) -> Any:
             depth -= 1
             if depth == 0:
                 return json.loads(text[start : i + 1])
-    raise ValueError(f"unterminated JSON in: {text[:120]!r}")
+    raise ValueError(f"JSON が閉じていません: {text[:120]!r}")
 
 
 def ask_json(provider: Provider, prompt: str, schema: dict) -> dict:

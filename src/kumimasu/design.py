@@ -32,7 +32,7 @@ DESIGN_PROMPT_JA = DATA_NOTE_JA + """
 
 著者の回答のうち、選び方の指示（「伝えた方がいい」「絞ってよい」「いらない」など）だけで材料としての事実を含まないものは、その指示をほかの単位の use に反映し、回答そのものは drop にします。
 
-材料に無いことは足さないでください。
+材料に無いことは足さないでください。{forms}
 
 # 材料と回答
 
@@ -51,9 +51,9 @@ def design_schema() -> dict:
 
 
 def design_prompt(p: Project, units: list[Unit], forms: str = "") -> str:
-    prompt = DESIGN_PROMPT_JA.format(topic=p.topic, audience=p.audience, kind=p.kind, length=p.length,
-                                     units=unit_lines(units, with_context=True))
-    return prompt.replace("\n\n# 材料と回答", f"\n\n著者の形の好み（forms の参考）: {forms}\n\n# 材料と回答", 1) if forms else prompt
+    return DESIGN_PROMPT_JA.format(topic=p.topic, audience=p.audience, kind=p.kind, length=p.length,
+                                   units=unit_lines(units, with_context=True),
+                                   forms=f"\n\n著者の形の好み（forms の参考）: {forms}" if forms else "")
 
 
 def default_use(u: Unit) -> str:
@@ -145,9 +145,7 @@ def noise_schema(skip_max: int, aside_max: int) -> dict:
 
 def noise_prompt(p: Project, d: Design, units: list[Unit], baseline: str, skip_max: int,
                  aside_max: int) -> str:
-    lines = unit_lines(units, with_context=True)
-    for u in units:
-        lines = lines.replace(f"[{u.id}]", f"[{u.id}]（use: {d.use_of(u.id)}）", 1)
+    lines = unit_lines(units, with_context=True, note=lambda u: f"（use: {d.use_of(u.id)}）")
     return NOISE_PROMPT_JA.format(topic=p.topic, audience=p.audience, kind=p.kind, skip_max=skip_max,
                                   aside_max=aside_max, baseline=baseline.strip() or "（なし）", units=lines)
 
@@ -170,7 +168,7 @@ def parse_noise(data: dict, d: Design, units: list[Unit], skip_max: int, aside_m
         i = row.get("id")
         u = by_id.get(i)
         if u and u.firsthand and d.use_of(i) == "mention" and i not in taken and len(asides) < aside_max \
-                and i not in {a.id for a in asides}:
+                and all(a.id != i for a in asides):
             asides.append(Aside(id=i, where=str(row.get("where", ""))[:LABEL_MAX], why=str(row.get("why", ""))))
     return apply_noise(d.model_copy(update={"skip": skips, "aside": asides}))
 
