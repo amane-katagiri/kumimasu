@@ -526,7 +526,7 @@ def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):
     assert '"next": "design"' in run("confirm", str(d))
     assert "deep 3" in run("design", str(d))
     assert "aside: m7" in run("noise", str(d))
-    out = run("review", str(d), "--keep-avoid")
+    out = run("review", str(d))
     assert "warning: 「コマンドが出る」が出る（原因: m12 / 書かない側: m3）" in out and "写真管理アプリの比較" in out
     run("set", str(d), "unit", "m1", "--use", "deep")
     run("confirm", str(d), "--note", "短めに")

@@ -7,7 +7,7 @@ from .generate import DATA_NOTE_JA
 from .interview import unit_lines
 from .llm import BOOL, STR, arr, ask_json, ids_in, obj, rows
 from .model import Design, Project, Term, Unit, UnitUse
-from .textutil import excerpt
+from .textutil import excerpt, norm
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -42,6 +42,7 @@ TERMS_MIN_SLICE = 20000
 TERMS_MAX = 30
 TERM_CHARS = 40
 DEFINED_MAX = 4
+DEFINED_MIN_RELEVANCE = 0.5
 SUGGEST_MAX = 8
 TIE_LOW = 0.15
 KEPT = ("deep", "mention")
@@ -90,6 +91,21 @@ def _chunks(units: list[Unit], budget: int) -> list[list[Unit]]:
     return out
 
 
+def relevance(term: str, text: str) -> float:
+    t, body = norm(term).lower(), norm(text).lower()
+    if not t:
+        return 0.0
+    if t in body:
+        return 1.0
+    grams = _bigrams(term)
+    return round(len(grams & _bigrams(text)) / len(grams), 2) if grams else 0.0
+
+
+def rank_definitions(term: str, ids: list[str], by: dict[str, Unit]) -> list[str]:
+    scored = [(relevance(term, by[i].text), n, i) for n, i in enumerate(ids) if i in by]
+    return [i for score, _, i in sorted(scored, key=lambda x: (-x[0], x[1])) if score >= DEFINED_MIN_RELEVANCE]
+
+
 def find_terms(d: Design, p: Project, units: list[Unit], provider: Provider) -> list[Term]:
     kept = [u for u in units if d.use_of(u.id) in KEPT]
     if not kept:
@@ -106,6 +122,9 @@ def find_terms(d: Design, p: Project, units: list[Unit], provider: Provider) -> 
             else:
                 old.used_by = list(dict.fromkeys(old.used_by + t.used_by))
                 old.defined_by = list(dict.fromkeys(old.defined_by + t.defined_by))
+    by = {u.id: u for u in units}
+    for t in merged.values():
+        t.defined_by = rank_definitions(t.term, t.defined_by, by)[:DEFINED_MAX]
     return list(merged.values())
 
 

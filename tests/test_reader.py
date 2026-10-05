@@ -110,7 +110,8 @@ def test_missing_definition_reaches_the_draft_prompt(tmp_path):
 def test_terms_are_batched_and_merged(monkeypatch):
     monkeypatch.setattr(terms, "TERMS_BATCH_CHARS", 10)
     monkeypatch.setattr(terms, "TERMS_MIN_SLICE", 100)
-    units = [Unit(id="k1", text="独自性スコアが 0.6 だった"), Unit(id="d1", text="a" * 80), Unit(id="d2", text="b" * 80)]
+    units = [Unit(id="k1", text="独自性スコアが 0.6 だった"), Unit(id="d1", text="独自性スコアとは" + "a" * 80),
+             Unit(id="d2", text="独自性スコアの求め方" + "b" * 80)]
     d = Design(units=[UnitUse(id="k1", use="deep"), UnitUse(id="d1", use="drop"), UnitUse(id="d2", use="drop")])
     seen = []
 
@@ -188,3 +189,22 @@ def test_reader_check_feeds_revise_and_the_final_check(tmp_path):
     _, done = revise(w, p, p, None, roles(), VOTES, None, "draft.md", "draft.v2.md")
     assert any("読者には分かりません" in t for t in done)
     assert "読者には分かりません" in (w.root / "draft.v2.prompt.md").read_text(encoding="utf-8")
+
+
+def test_definitions_unrelated_to_the_term_are_dropped():
+    by = {"m1": Unit(id="m1", text="LLM 注釈をバッチにまとめて呼び出し回数を減らした"),
+          "m2": Unit(id="m2", text="意味の木とは、文書を節と段落の木として持つ表現のこと"),
+          "m3": Unit(id="m3", text="木の節ごとに意味を付ける")}
+    assert terms.rank_definitions("意味の木", ["m1", "m3", "m2"], by) == ["m2"]
+    assert terms.relevance("意味の木", by["m1"].text) < terms.DEFINED_MIN_RELEVANCE
+
+
+def test_review_keeps_the_avoid_list(tmp_path):
+    p = scripted(terms=TERMS)
+    w = designed(tmp_path / "w", p)
+    ops.update_design(w, {"avoid": [*w.design().avoid, "Zenn の記事の分析"]}, "human-ui")
+    before = w.design()
+    review_conflicts(w, p, p)
+    after = w.design()
+    assert after.avoid == before.avoid and "Zenn の記事の分析" in after.avoid
+    assert after.avoid_proposed == before.avoid_proposed

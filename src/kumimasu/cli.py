@@ -144,14 +144,13 @@ def noise(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) ->
 
 
 @app.command()
-def review(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None,
-           keep_avoid: Annotated[bool, typer.Option("--keep-avoid", help="Keep the avoid list as edited")] = False) -> None:
-    """Recompute, for the current design, which drop units the kept units would bring in anyway, the avoid topics, and
-    the terms the reader may not know (warnings only; nothing is kept automatically)."""
+def review(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) -> None:
+    """Recompute, for the current design, which drop units the kept units would bring in anyway and the terms the reader
+    may not know (warnings only; uses and avoid topics are left as they are)."""
     wd = cc.workdir(path, "design", action="設計の見直し")
     cfg = cc.config(path)
     with errors():
-        d = review_conflicts(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge), keep_avoid)
+        d = review_conflicts(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge))
     _echo_design_notes(d, wd.units())
 
 

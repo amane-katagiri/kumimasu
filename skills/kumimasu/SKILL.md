@@ -79,7 +79,7 @@ kumimasu set DIR research add "…" | research rm N   # ウェブで調べるこ
 kumimasu set DIR forms "比較は表"                   # 形の好み（設計と下書きの依頼に載る）
 kumimasu set DIR explain "用語"                     # その用語のいちばんよい説明の単位を触れるにする
 kumimasu rule DIR list | on N | off N | edit N "…" | add "…" | rm N
-kumimasu review DIR        # 使う単位を変えたら、書かないのに出てしまう内容と、読者が知らない用語の警告を作り直す（自動では足さない）
+kumimasu review DIR        # 使う単位を変えたら、書かないのに出てしまう内容と、読者が知らない用語の警告を作り直す（自動では足さない。使う単位と書かない話題はそのまま）
 kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）を提案し直す（ほかの use はそのまま）
 ```
 
