@@ -66,6 +66,18 @@ kumimasu export work/exif-rename --to .
 
 作業ディレクトリ（`project.yaml`・`units.yaml`・`interview.yaml`・`design.yaml`・`draft.md`・`check.json`・`review.draft.yaml`・`draft.final.md`・`handoff.json`・`history.jsonl` など）にすべての状態があり、どの段からでも読み直し・やり直しができます。`kumimasu show DIR` で今の段階と決められることが出ます。
 
+前の段階に戻りたいときは、段階を巻き戻さず新しいラウンドを始めます（`kumimasu restart`、画面では前の段階を開いて「この段階からやり直す」）。前のラウンドのファイルはそのまま残ります。
+
+| やり直し | 新しいラウンドで |
+|---|---|
+| `--from interview` | 質問と答えを引き継ぎ、答えを直す |
+| `--from interview --regenerate` | 質問から作り直す（前の質問と答えは `interview.rN.yaml` に残る） |
+| `--from design --keep` | 今の設計を写して直す |
+| `--from design` | 設計を作り直す |
+| `--from drafting` | 設計はそのまま、下書きと検査をやり直す |
+
+やり直すと `handoffs.jsonl` に `event: "restart"` の行が入り、確定を待っている `kumimasu wait` はそれを返して終わります（確定なら `event: "handoff"`）。エージェントは `from` と `mode` を見て、作り直しなら質問・設計・下書きを作り、引き継ぎなら本人の確定を待ちます。
+
 ## 設定
 
 上ほど強い層で決まります。

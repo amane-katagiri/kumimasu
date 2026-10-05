@@ -31,7 +31,7 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
     p = wd.project()
     part = stage or ("review" if p.stage == "done" else p.stage)
     snap: dict = {"topic": p.topic, "stage": p.stage, "round": p.round, "next": NEXT_STEP[p.stage], "showing": part,
-                  "last_handoff": (ops.handoffs(wd) or [None])[-1]}
+                  "last_handoff": (ops.handoffs(wd) or [None])[-1], "restart": ops.last_restart(wd)}
     if part == "interview" and wd.interview_file.exists():
         by = {u.id: u for u in wd.units()}
         snap["interview"] = [{"id": q.id, "question": q.question, "context": q.context, "answer": q.answer,
@@ -103,6 +103,9 @@ def _ref_text(r: dict) -> str:
 
 def text(snap: dict) -> str:
     lines = [f"{snap['topic']}", f"段階: {ops.STAGE_LABEL[snap['stage']]}（ラウンド {snap['round']}）  次: {snap['next']}"]
+    if r := snap.get("restart"):
+        lines.append(f"やり直し: 「{ops.STAGE_LABEL[r['from']]}」から「{ops.RESTART_MODES[r['from']][r['mode']][0]}」"
+                     f"（ラウンド {r['previous_round']} から）" + (f"  指示: {r['note']}" if r["note"] else ""))
     if iv := snap.get("interview"):
         lines.append("\n[インタビュー]")
         for q in iv:

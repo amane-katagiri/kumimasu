@@ -209,21 +209,144 @@ def test_auto_review_never_rewrites_and_keeps_material_sentences(wd, monkeypatch
     assert h["who"] == "auto" and ops.stage(wd) == "done" and (wd.root / "draft.final.md").exists()
 
 
-def test_restart_rounds(wd):
+def test_restart_design_regenerate_then_drafting(wd):
     to_review(wd)
     ops.confirm(wd, "agent-chat")
-    n = ops.restart(wd, "design", "agent-chat")
-    assert n == 2 and ops.stage(wd) == "design" and wd.design_file.name == "design.r2.yaml" and not wd.design_file.exists()
+    ev = ops.restart(wd, "design", "agent-chat", note="持ち帰りを一つに")
+    assert ev["event"] == "restart" and ev["from"] == "design" and ev["mode"] == "regenerate"
+    assert (ev["round"], ev["previous_round"], ev["previous_stage"], ev["who"], ev["note"]) == (2, 1, "done", "human", "持ち帰りを一つに")
+    assert ops.handoffs(wd)[-1] == ev and ops.history(wd)[-1]["op"] == "restart"
+    assert ops.stage(wd) == "design" and wd.design_file.name == "design.r2.yaml" and not wd.design_file.exists()
     assert wd.draft_base() == "draft.r2.md" and (wd.root / "design.yaml").exists() and wd.interview_file.exists()
+    w = ops.waiting(wd)
+    assert w["doing"] == "design" and w["title"] == "エージェントが設計を作っています"
+    assert w["steps"][0] == {"label": "ラウンド 2 としてやり直す", "state": "done"}
+    assert ops.stage_info(wd)["last_handoff"]["note"] == "持ち帰りを一つに"
+    assert "やり直し: 「設計」から「設計を作り直す」" in run_cli("show", wd.root)
     assert ops.wait_for(wd, "design", timeout=0) is None
     design(wd, scripted(), scripted(), defaults())
+    assert ops.waiting(wd) is None
     ops.confirm(wd, "agent-chat")
     draft(wd, scripted(), roles(), wd.draft_base())
     assert (wd.root / "draft.r2.md").exists() and (wd.root / "draft.md").exists()
-    out = run_cli("restart", wd.root, "--from", "drafting")
-    assert "round 3" in out and (wd.root / "design.r3.yaml").read_text(encoding="utf-8") == \
-        (wd.root / "design.r2.yaml").read_text(encoding="utf-8")
+    assert "今より前の段階だけ" in run_cli("restart", wd.root, "--from", "drafting", code=1)
+    ops.confirm(wd, "agent", draft="draft.r2.md")
+    ev = json.loads(run_cli("restart", wd.root, "--from", "drafting"))
+    assert ev["round"] == 3 and ev["mode"] == "regenerate" and ops.stage(wd) == "drafting"
+    assert (wd.root / "design.r3.yaml").read_text(encoding="utf-8") == (wd.root / "design.r2.yaml").read_text(encoding="utf-8")
+    assert ops.waiting(wd)["doing"] in ("research", "draft") and ops.waiting(wd)["steps"][0]["label"] == "ラウンド 3 としてやり直す"
     run_cli("restart", wd.root, "--from", "review", code=1)
+
+
+def test_restart_design_keep_copies_the_current_design(wd):
+    to_review(wd)
+    assert list(ops.stage_info(wd)["restart"]) == ["interview", "design", "drafting"]
+    before = (wd.root / "design.yaml").read_text(encoding="utf-8")
+    ev = json.loads(run_cli("restart", wd.root, "--from", "design", "--keep"))
+    assert ev["mode"] == "keep" and ops.stage(wd) == "design" and wd.design_file.name == "design.r2.yaml"
+    assert wd.design_file.read_text(encoding="utf-8") == before and ops.waiting(wd) is None
+    assert [o["mode"] for o in ops.stage_info(wd)["restart"]["interview"]] == ["keep", "regenerate"]
+    assert list(ops.stage_info(wd)["restart"]) == ["interview"]
+    ops.update_design(wd, {"purpose": "直したねらい"}, "human-ui")
+    assert wd.design().purpose == "直したねらい" and (wd.root / "design.yaml").read_text(encoding="utf-8") == before
+    assert ops.wait_for(wd, "design", timeout=0) is None
+    h = ops.confirm(wd, "human-ui")
+    assert h["event"] == "handoff" and h["round"] == 2 and ops.wait_for(wd, "design", timeout=0) == h
+
+
+def test_restart_interview_keep_then_regenerate(wd):
+    ops.answer(wd, "q1", "最初の答え", "human-ui")
+    to_design(wd)
+    old = wd.interview_file.read_text(encoding="utf-8")
+    ev = ops.restart(wd, "interview", "human-ui")
+    assert ev["mode"] == "keep" and ev["who"] == "human" and ops.stage(wd) == "interview"
+    assert wd.interview_file.read_text(encoding="utf-8") == old and ops.waiting(wd) is None
+    assert (wd.root / "design.yaml").exists() and not wd.design_file.exists()
+    ops.answer(wd, "q1", "直した答え", "human-ui")
+    ops.confirm(wd, "human-ui")
+    assert ops.stage(wd) == "design" and ops.waiting(wd)["doing"] == "design"
+    ev = json.loads(run_cli("restart", wd.root, "--from", "interview", "--regenerate", "--note", "体験を聞いて"))
+    assert ev["mode"] == "regenerate" and ev["round"] == 3 and ev["archived"] == "interview.r2.yaml"
+    assert not wd.interview_file.exists() and "直した答え" in (wd.root / "interview.r2.yaml").read_text(encoding="utf-8")
+    assert ops.history(wd)[-1]["archived"] == "interview.r2.yaml" and wd.answer_units() == []
+    w = ops.waiting(wd)
+    assert w["doing"] == "questions" and w["title"] == "エージェントが質問を作っています"
+    assert w["steps"][0]["label"] == "ラウンド 3 としてやり直す"
+    interview(wd, scripted(), always_ask())
+    assert ops.waiting(wd) is None and all(not q.answer for q in wd.interview().questions)
+
+
+def test_restart_rejects_later_stages_and_bad_modes(wd):
+    def unchanged(fn, exc, match):
+        before = (wd.project(), len(ops.handoffs(wd)))
+        with pytest.raises(exc, match=match):
+            fn()
+        assert (wd.project(), len(ops.handoffs(wd))) == before
+
+    unchanged(lambda: ops.restart(wd, "interview", "agent-chat"), ops.StageError, "今より前の段階だけ")
+    unchanged(lambda: ops.restart(wd, "design", "agent-chat"), ops.StageError, "今より前の段階だけ")
+    assert ops.stage_info(wd)["restart"] == {}
+    to_design(wd)
+    unchanged(lambda: ops.restart(wd, "design", "agent-chat", "keep"), ops.StageError, "今は「設計」")
+    unchanged(lambda: ops.restart(wd, "drafting", "agent-chat"), ops.StageError, "今より前の段階だけ")
+    unchanged(lambda: ops.restart(wd, "interview", "agent-chat", "bogus"), ValueError, "使えるのは keep・regenerate")
+    unchanged(lambda: ops.restart(wd, "review", "agent-chat"), ValueError, "--from は")
+    ops.confirm(wd, "human-ui")
+    unchanged(lambda: ops.restart(wd, "drafting", "agent-chat", "keep"), ValueError, "「下書き」からのやり直しに keep は使えません")
+    wd.design_file.unlink()
+    unchanged(lambda: ops.restart(wd, "design", "agent-chat", "keep"), ops.StageError, "設計を引き継げません")
+    assert "一緒に使えません" in run_cli("restart", wd.root, "--from", "design", "--keep", "--regenerate", code=2)
+    run_cli("restart", wd.root, "--from", "drafting", "--keep", code=1)
+
+
+def test_wait_wakes_on_a_restart(wd):
+    to_review(wd)
+    found: dict = {}
+
+    def waiter():
+        found["h"] = ops.wait_for(wd, "review", timeout=5, interval=0.05)
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    time.sleep(0.2)
+    assert "h" not in found
+    ev = ops.restart(wd, "design", "human-ui", "keep", "ここを直す")
+    t.join(5)
+    assert found["h"] == ev and found["h"]["event"] == "restart"
+    assert ops.wait_for(wd, "design", timeout=0.2, interval=0.05) is None
+
+    def cli_waiter():
+        found["out"] = run_cli("wait", wd.root, "--for", "design", "--timeout", "5", "--interval", "0.05")
+
+    t = threading.Thread(target=cli_waiter)
+    t.start()
+    time.sleep(0.3)
+    ops.restart(wd, "interview", "human-ui", "regenerate")
+    t.join(5)
+    out = json.loads(found["out"])
+    assert out["event"] == "restart" and out["from"] == "interview" and out["mode"] == "regenerate" and out["round"] == 3
+
+
+def test_server_restart_endpoint(wd):
+    to_review(wd)
+    with serving(wd) as c:
+        assert c.post("/api/restart", {"from": "design", "mode": "keep"}, token=None)[0] == 403
+        assert c.post("/api/restart", {"from": "design", "mode": "keep"}, headers={"Origin": "https://evil.example"})[0] == 403
+        assert c.post("/api/restart", {"from": "design"})[0] == 400
+        assert c.post("/api/restart", {"from": ["design"], "mode": "keep"})[0] == 400
+        assert c.post("/api/restart", {"from": "review", "mode": "regenerate"})[0] == 400
+        assert c.post("/api/restart", {"from": "drafting", "mode": "keep"})[0] == 400
+        assert wd.round == 1
+        code, body = c.post("/api/restart", {"from": "design", "mode": "keep", "note": "持ち帰りを直す"})
+        assert code == 200 and body["restart"]["mode"] == "keep" and body["restart"]["source"] == "human-ui"
+        assert body["stage"]["stage"] == "design" and body["stage"]["round"] == 2 and body["design"] is not None
+        assert list(body["stage"]["restart"]) == ["interview"] and body["stage"]["waiting"] is None
+        code, err = c.post("/api/restart", {"from": "design", "mode": "keep"})
+        assert code == 409 and "今より前の段階だけ" in err["error"] and str(wd.root) not in err["error"]
+        code, body = c.post("/api/restart", {"from": "interview", "mode": "regenerate"})
+        assert code == 200 and body["interview"] is None and body["stage"]["waiting"]["doing"] == "questions"
+        code, v = c.get("/api/version")
+        assert v["last_handoff"]["event"] == "restart" and v["round"] == 3
 
 
 def test_version_endpoint_etag_and_live_changes(wd):

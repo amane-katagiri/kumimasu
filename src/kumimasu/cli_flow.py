@@ -214,8 +214,9 @@ def confirm(path: DirArg, note: Annotated[str, typer.Option("--note", help="Inst
 def wait(path: DirArg, for_stage: Annotated[str, typer.Option("--for", help="interview | design | drafting | review | done")],
          timeout: Annotated[float | None, typer.Option("--timeout", help="Seconds (default: no limit)")] = None,
          interval: Annotated[float, typer.Option("--interval")] = 2.0) -> None:
-    """Block until the handoff that completes this stage (in the current round) exists; print it. Run it in the
-    background so the agent is woken up when the person confirms. Exit 2 on timeout."""
+    """Block until the handoff that completes this stage (in the current round) exists, or the person restarts from
+    an earlier stage; print it (`event` is "handoff" or "restart"). Run it in the background so the agent is woken up
+    when the person confirms or goes back. Exit 2 on timeout."""
     _stage_choice(for_stage, STAGES, "--for")
     wd = cc.workdir(path)
     h = ops.wait_for(wd, for_stage, timeout, interval)
@@ -247,13 +248,26 @@ def auto(path: DirArg, stage: Annotated[str, typer.Option("--stage", help="inter
 
 @app.command()
 def restart(path: DirArg, from_stage: Annotated[str, typer.Option("--from", help="interview | design | drafting")],
+            keep: Annotated[bool, typer.Option("--keep", help="With --from design: copy the current design into the new round to edit")] = False,
+            regenerate: Annotated[bool, typer.Option("--regenerate", help="With --from interview: the agent makes new questions (the old answers are archived)")] = False,
+            note: Annotated[str, typer.Option("--note", help="Instruction for the agent")] = "",
             source: SourceOpt = "agent-chat") -> None:
-    """Start a new round instead of going back in place: material and interview stay; the new round gets its own
-    design.rN.yaml and draft.rN.md (from drafting, the design is copied over)."""
+    """Go back to an earlier stage by starting a new round; earlier files stay. Prints the restart event (JSON), which
+    also wakes a running `kumimasu wait`.
+
+    \b
+    --from interview                 keep the questions and answers; the person edits the answers
+    --from interview --regenerate    the agent makes new questions (kumimasu interview)
+    --from design --keep             copy the current design; the person edits it
+    --from design                    the agent proposes a new design (kumimasu design)
+    --from drafting                  keep the design; the agent drafts and checks again"""
+    if keep and regenerate:
+        raise typer.BadParameter("--keep と --regenerate は一緒に使えません")
     wd = cc.workdir(path)
     with errors():
-        n = ops.restart(wd, from_stage, cc.source(source))
-    typer.echo(f"round {n}: stage {from_stage}; design {wd.design_file.name}, draft {wd.draft_base()}")
+        event = ops.restart(wd, from_stage, cc.source(source), "keep" if keep else "regenerate" if regenerate else None,
+                            note)
+    typer.echo(json.dumps(event, ensure_ascii=False, indent=1))
 
 
 @app.command()

@@ -221,7 +221,7 @@ def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Pro
             extra = {"final": str((wd.root / final).resolve()), "draft": base,
                      "article": article_info(wd, wd.read(final)), "used": read_used(wd, base)}
         autos = [h for h in history(wd) if h["source"] == "auto" and h["stage"] == cur and h["round"] == p.round]
-        handoff = {"stage": cur, "next": NEXT[cur], "round": p.round, "at": now(), "who": WHO[source],
+        handoff = {"event": "handoff", "stage": cur, "next": NEXT[cur], "round": p.round, "at": now(), "who": WHO[source],
                    "source": source, "note": note, "auto": autos} | extra
         record(wd, source, "confirm", note=note)
         set_stage(wd, NEXT[cur])
@@ -237,14 +237,19 @@ def handoffs(wd: WorkDir) -> list[dict]:
 def find_handoff(wd: WorkDir, for_stage: str, rows: list[dict] | None = None) -> dict | None:
     target = "review" if for_stage == "done" else for_stage
     r = wd.round
-    found = [h for h in (handoffs(wd) if rows is None else rows) if h["stage"] == target and h["round"] == r]
+    found = [h for h in (handoffs(wd) if rows is None else rows) if h.get("stage") == target and h["round"] == r]
     return found[-1] if found else None
 
 
 def wait_for(wd: WorkDir, for_stage: str, timeout: float | None = None, interval: float = 1.0) -> dict | None:
     end = None if timeout is None else time.monotonic() + timeout
+    seen = len(handoffs(wd))
     while True:
-        h = find_handoff(wd, for_stage)
+        rows = handoffs(wd)
+        restarts = [h for h in rows[seen:] if h.get("event") == "restart"]
+        if restarts:
+            return restarts[-1]
+        h = find_handoff(wd, for_stage, rows)
         if h is not None:
             return h
         if end is not None and time.monotonic() >= end:
@@ -253,22 +258,69 @@ def wait_for(wd: WorkDir, for_stage: str, timeout: float | None = None, interval
 
 
 RESTART_FROM = ("interview", "design", "drafting")
+RESTART_MODES: dict[str, dict[str, tuple[str, str]]] = {
+    "interview": {
+        "keep": ("答えを直す（質問はそのまま）",
+                 "今の質問と答えを引き継ぎます。答えを直して確定すると、エージェントが設計から作り直します。"),
+        "regenerate": ("質問から作り直す",
+                       "エージェントが質問を作り直します。今の質問と答えは {archive} に残り、新しい質問には引き継がれません。"),
+    },
+    "design": {
+        "keep": ("設計を直す（今の設計を引き継ぐ）", "今の設計を新しいラウンドに写します。直して確定すると、エージェントが書き直します。"),
+        "regenerate": ("設計を作り直す", "エージェントがインタビューの答えと材料から設計を提案し直します。"),
+    },
+    "drafting": {
+        "regenerate": ("書き直す（設計はそのまま）", "今の設計のまま、エージェントが下書き・検査・最終チェックへの受け渡しをやり直します。"),
+    },
+}
+DEFAULT_MODE = {"interview": "keep", "design": "regenerate", "drafting": "regenerate"}
 
 
-def restart(wd: WorkDir, from_stage: str, source: str) -> int:
+def interview_archive(round_: int) -> str:
+    return f"interview.r{round_}.yaml"
+
+
+def restart_options(wd: WorkDir) -> dict[str, list[dict]]:
+    p = wd.project()
+    cur = STAGES.index(p.stage)
+    return {s: [{"mode": m, "label": label, "detail": detail.format(archive=interview_archive(p.round))}
+                for m, (label, detail) in RESTART_MODES[s].items()]
+            for s in RESTART_FROM if STAGES.index(s) < cur}
+
+
+def restart(wd: WorkDir, from_stage: str, source: str, mode: str | None = None, note: str = "") -> dict:
     if from_stage not in RESTART_FROM:
         raise ValueError(f"--from は {', '.join(RESTART_FROM)} のどれかにしてください")
+    mode = mode or DEFAULT_MODE[from_stage]
+    modes = RESTART_MODES[from_stage]
+    if mode not in modes:
+        raise ValueError(f"「{STAGE_LABEL[from_stage]}」からのやり直しに {mode} は使えません"
+                         f"（使えるのは {'・'.join(modes)}）")
     with LOCK:
         p = wd.project()
+        if STAGES.index(from_stage) >= STAGES.index(p.stage):
+            raise StageError(f"やり直せるのは今より前の段階だけです（今は「{STAGE_LABEL[p.stage]}」、"
+                             f"「{STAGE_LABEL[from_stage]}」からはやり直せません）")
         old_design = wd.design_file
+        carry_design = from_stage == "drafting" or (from_stage == "design" and mode == "keep")
+        if carry_design and not old_design.exists():
+            raise StageError(f"{old_design.name} がないので、設計を引き継げません")
+        archive = wd.root / interview_archive(p.round)
+        regen_interview = from_stage == "interview" and mode == "regenerate"
         n = p.round + 1
+        if regen_interview and wd.interview_file.exists():
+            wd.interview_file.rename(archive)
         wd.save_project(p.model_copy(update={"stage": from_stage, "round": n, "review_draft": ""}))
-        if from_stage == "drafting":
-            if not old_design.exists():
-                raise StageError(f"{old_design.name} がありません")
+        if carry_design:
             atomic_write(wd.design_file, old_design.read_text(encoding="utf-8"))
-        record(wd, source, "restart", from_stage=from_stage, previous_round=p.round)
-        return n
+        event = {"event": "restart", "from": from_stage, "mode": mode, "round": n, "previous_round": p.round,
+                 "previous_stage": p.stage, "at": now(), "who": WHO[source], "source": source, "note": note}
+        if regen_interview and archive.exists():
+            event["archived"] = archive.name
+        record(wd, source, "restart", from_stage=from_stage, mode=mode, previous_round=p.round, note=note,
+               **({"archived": event["archived"]} if "archived" in event else {}))
+        append_jsonl(wd.root / HANDOFFS, event)
+        return event
 
 
 VERSIONED = ("project.yaml", "units.yaml", "interview.yaml", "keep.yaml", HANDOFF)
@@ -291,7 +343,8 @@ def stage_info(wd: WorkDir) -> dict:
     rows = handoffs(wd)
     return {"stage": p.stage, "round": p.round, "stages": list(STAGES), "labels": STAGE_LABEL,
             "draft": wd.review_draft(), "handoff": find_handoff(wd, p.stage, rows) if p.stage == "done" else None,
-            "last_handoff": rows[-1] if rows else None, "waiting": waiting(wd)}
+            "last_handoff": rows[-1] if rows else None, "waiting": waiting(wd, rows),
+            "restart": restart_options(wd)}
 
 
 AFTER = "終わると自動で次の画面に切り替わります。この間は編集できません。"
@@ -325,17 +378,28 @@ def _scene(first: str, work: list[tuple[str, bool]], human: str) -> dict | None:
     return {"doing": current, "title": title, "detail": detail, "next": AFTER, "steps": steps}
 
 
-def waiting(wd: WorkDir) -> dict | None:
-    match wd.project().stage:
+def last_restart(wd: WorkDir, rows: list[dict] | None = None) -> dict | None:
+    p = wd.project()
+    found = [h for h in (handoffs(wd) if rows is None else rows)
+             if h.get("event") == "restart" and h["round"] == p.round and h["from"] == p.stage]
+    return found[-1] if found else None
+
+
+def waiting(wd: WorkDir, rows: list[dict] | None = None) -> dict | None:
+    cur = wd.project().stage
+    r = last_restart(wd, rows) if cur in RESTART_FROM else None
+    restarted = f"ラウンド {r['round']} としてやり直す" if r else ""
+    match cur:
         case "interview":
-            return _scene("材料を単位に分ける", [("questions", wd.interview_file.exists())], HUMAN_STEP["interview"])
+            return _scene(restarted or "材料を単位に分ける", [("questions", wd.interview_file.exists())],
+                          HUMAN_STEP["interview"])
         case "design":
-            return _scene("インタビューを確定", [("design", wd.design_file.exists())], HUMAN_STEP["design"])
+            return _scene(restarted or "インタビューを確定", [("design", wd.design_file.exists())], HUMAN_STEP["design"])
         case "drafting":
             base = wd.draft_base()
             has_research = wd.design_file.exists() and bool(wd.design().research)
             work = [("research", (wd.root / research_name(wd)).is_file())] if has_research else []
             work += [("draft", wd.is_plain_file(base)), ("check", (wd.root / f"{check_stem(base)}.json").is_file()),
                      ("finish", False)]
-            return _scene("設計を確定", work, HUMAN_STEP["review"])
+            return _scene(restarted or "設計を確定", work, HUMAN_STEP["review"])
     return None

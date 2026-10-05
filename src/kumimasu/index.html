@@ -88,7 +88,19 @@ header h1 { font-size: var(--t-xl); font-weight: 600; line-height: 1.4; margin: 
 .stages button.on { color: var(--ink); border-bottom-color: var(--ink-3); }
 .stages button.cur { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
 .stages button:disabled { color: var(--ink-3); opacity: .6; }
-.ro-banner { overflow-wrap: anywhere; margin: 0 var(--gutter); padding: var(--s3) 0; font-size: var(--t-s); color: var(--ink-2); border-bottom: 1px solid var(--line-soft); }
+.ro-banner { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); overflow-wrap: anywhere; margin: 0 var(--gutter); padding: var(--s3) 0; font-size: var(--t-s); color: var(--ink-2); border-bottom: 1px solid var(--line-soft); }
+.ro-banner .btn { padding: 0 8px; color: var(--accent); }
+.restart-dlg { width: min(560px, calc(100vw - 32px)); }
+.restart-dlg form { margin: 0; }
+.restart-dlg fieldset { border: 0; margin: 0 0 var(--s4); padding: 0; }
+.restart-dlg legend { padding: 0; }
+.restart-dlg .mode { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 var(--s3); align-items: baseline; margin: 0 0 var(--s2); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r); font-size: var(--t-m); color: var(--ink); cursor: pointer; }
+.restart-dlg .mode:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.restart-dlg .mode input { accent-color: var(--accent); margin: 0; }
+.restart-dlg .mode b { font-weight: 600; }
+.restart-dlg .mode .note { grid-column: 2; }
+.restart-dlg .acts { display: flex; justify-content: flex-end; align-items: center; gap: var(--s3); margin-top: var(--s4); }
+.restart-dlg .warn-box:empty { display: none; }
 
 main { flex: 1; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 420px); gap: var(--s7); padding: var(--s6) var(--gutter) var(--s7); max-width: 1440px; margin: 0 auto; }
@@ -354,6 +366,7 @@ mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-
   <dialog class="fc-diff" id="fc-diff"></dialog>
 </div>
 </main>
+<dialog class="fc-diff restart-dlg" id="restart-dlg" aria-labelledby="restart-title"></dialog>
 <div id="fc-pop" class="fc-pop" hidden></div>
 <div id="ref-pop" class="fc-pop ref-pop" role="dialog" aria-label="参考の材料" hidden></div>
 <footer id="foot">
@@ -696,12 +709,16 @@ function showScreen(s) {
   $("#fc-apply").hidden = !editable;
   const banner = $("#ro-banner");
   const last = st.last_handoff;
+  const done = st.handoff;
+  const opts = s !== st.stage ? st.restart[s] : null;
   if (st.stage === "done" && (s === "review" || s === "done")) {
     banner.hidden = false;
-    banner.textContent = `完了しました。確定した記事: ${last && last.final ? last.final : ""}`;
-  } else if (!editable && screen !== "wait") {
+    banner.textContent = `完了しました。確定した記事: ${done && done.final ? done.final : ""}`;
+  } else if (!editable && (screen !== "wait" || s !== st.stage)) {
     banner.hidden = false;
-    banner.textContent = `読み取り専用（今の段階: ${st.labels[st.stage]}）`;
+    banner.innerHTML = `<span>読み取り専用（今の段階: ${esc(st.labels[st.stage])}、ラウンド ${st.round}）</span>` +
+      (opts ? `<button type="button" class="btn quiet" id="restart-open" aria-haspopup="dialog">この段階からやり直す</button>` : "");
+    $("#restart-open")?.addEventListener("click", () => openRestart(s, opts));
   } else banner.hidden = true;
   if (screen === "wait") renderWait(wait, last);
   $("#confirm-bar").hidden = !editable;
@@ -709,8 +726,42 @@ function showScreen(s) {
   if (screen === "final") openFinal().catch((e) => status("読み込めません: " + e.message, true));
 }
 
+function openRestart(s, opts) {
+  const st = S.data.stage;
+  const dlg = $("#restart-dlg");
+  dlg.innerHTML = `<form><div class="head"><div><h2 id="restart-title">「${esc(st.labels[s])}」からやり直す</h2>
+      <p class="note">ラウンド ${st.round + 1} を始めます。これまでのファイル（質問と答え・設計・下書き・確定した記事）は消えずに残り、ラウンド ${st.round} は読み取り専用になります。</p></div></div>
+    <div class="body">
+      <fieldset><legend class="label">どうやり直すか</legend>${opts.map((o, i) => `<label class="mode"><input type="radio" name="mode" value="${esc(o.mode)}"${i === 0 ? " checked" : ""}><b>${esc(o.label)}</b><span class="note">${esc(o.detail)}</span></label>`).join("")}</fieldset>
+      <label for="restart-note">エージェントへの指示（任意）</label>
+      <textarea id="restart-note" rows="2" placeholder="例: 2 問目の答えを足したので、設計で反映してほしい"></textarea>
+      <p class="warn-box" id="restart-err" role="alert"></p>
+      <div class="acts"><button type="button" class="btn" id="restart-cancel">やめる</button><button type="submit" class="primary" id="restart-go">やり直す</button></div>
+    </div></form>`;
+  $("#restart-cancel").addEventListener("click", () => dlg.close());
+  dlg.querySelector("form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const mode = dlg.querySelector("input[name=mode]:checked").value;
+    const go = $("#restart-go");
+    go.disabled = true;
+    try {
+      const r = await api("/api/restart", { method: "POST", body: { from: s, mode, note: $("#restart-note").value } });
+      dlg.close();
+      S.data = r;
+      S.version = r.version;
+      renderAll();
+      showScreen(r.stage.stage);
+      status(`ラウンド ${r.stage.round} を「${r.stage.labels[s]}」から始めました`);
+    } catch (e) {
+      $("#restart-err").textContent = "やり直せません: " + e.message;
+      go.disabled = false;
+    }
+  });
+  dlg.showModal();
+}
+
 function busy() {
-  return Object.keys(S.timers).length > 0 || FC.timer || Date.now() - S.lastInput < 4000 || !$("#fc-pop").hidden || $("#fc-diff").open;
+  return Object.keys(S.timers).length > 0 || FC.timer || Date.now() - S.lastInput < 4000 || !$("#fc-pop").hidden || $("#fc-diff").open || $("#restart-dlg").open;
 }
 
 async function poll() {

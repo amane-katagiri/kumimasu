@@ -117,6 +117,13 @@ class WriteApp:
         handoff = ops.confirm(self.wd, SOURCE, str(body.get("note", "")), self.rewriter)
         return {"handoff": handoff} | self.state()
 
+    def restart(self, body: dict) -> dict:
+        from_stage, mode = body.get("from"), body.get("mode")
+        if not isinstance(from_stage, str) or not isinstance(mode, str):
+            raise TypeError("from と mode は文字列にしてください")
+        event = ops.restart(self.wd, from_stage, SOURCE, mode, str(body.get("note", "")))
+        return {"restart": event} | self.state()
+
     def version(self) -> str:
         return ops.version(self.wd)
 
@@ -165,6 +172,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
     exact = {("GET", "/api/drafts"): lambda body: app.drafts(),
              ("GET", "/api/state"): lambda body: app.state(),
              ("POST", "/api/confirm"): app.confirm,
+             ("POST", "/api/restart"): app.restart,
              ("PUT", "/api/interview"): app.save_answers,
              ("PUT", "/api/design"): app.save_design}
     named = {("GET", "review"): lambda name, body: app.review(name),
