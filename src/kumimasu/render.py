@@ -7,6 +7,7 @@ from html import escape
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from .figures import figure_text
 from .parts.markdown import parse
 from .parts.model import Part, PartDoc
 
@@ -102,10 +103,18 @@ def _inline(cur: _Cursor, text: str) -> str:
                 case "link_close":
                     cur.skip_destination()
                     out.append("</a>")
+                case "html_inline":
+                    if (fig := figure_text(c.content)) is not None:
+                        out.append(_figure(fig, "span", " inline"))
                 case "image":
                     cur.skip_image()
                     out.append(f'<span class="img-ph inline">画像: {escape(_alt(c))}</span>')
     return "".join(out)
+
+
+def _figure(text: str, tag: str = "div", cls: str = "", attrs: str = "") -> str:
+    head = " ".join(x for x in (tag, attrs, f'class="fig-ph{cls}"', 'title="図の目印（後で図にする所）"') if x)
+    return f"<{head}><b>図</b>{escape(text)}</{tag}>"
 
 
 def _image_alt(text: str) -> str:
@@ -161,6 +170,8 @@ class Renderer:
                 return f"<blockquote {at}>\n{self.blocks(p.children)}\n</blockquote>"
             case "table":
                 return f"<table {at}>\n{self.rows(p)}\n</table>"
+            case "html" if (fig := figure_text(p.text)) is not None:
+                return _figure(fig, attrs=at)
             case "html" | "raw":
                 return f'<pre {at} class="{p.kind}">{_lines(self.cursor(p), p.text)}</pre>'
             case "rule":

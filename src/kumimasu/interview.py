@@ -30,7 +30,8 @@ def unit_lines(units: list[Unit], with_mark: bool = True, with_context: bool = F
             tag = f"（{SEARCHABLE_LABEL[u.searchable]}）" if with_mark else ""
         kind = "コード" if u.kind == "code" else ""
         body = f"```\n{text}\n```" if u.kind == "code" else text
-        out.append(f"[{u.id}]{note(u) if note else ''}{tag}{kind}\n{body}")
+        where = f"（場所: {u.path}）" if u.path and u.origin != "answer" else ""
+        out.append(f"[{u.id}]{note(u) if note else ''}{where}{tag}{kind}\n{body}")
     return "\n\n".join(out)
 
 

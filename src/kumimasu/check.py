@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from .coverage import coverage_prompt, coverage_schema, parse_coverage
 from .design import sync_design
 from .factcheck import UrlStatus, extract_urls, firsthand_hits
+from .figures import figure_markers
 from .generate import DATA_NOTE_JA
 from .infounits import InfoUnit, as_info_units, info_units, units_block
 from .interview import unit_lines
@@ -22,6 +23,7 @@ from .model import Design, Project, Unit
 from .parts.lint import lint as parts_lint
 from .parts.markdown import parse as parse_parts
 from .surface import (
+    CAVEAT,
     GLUE,
     SurfaceHit,
     SurfaceReport,
@@ -49,7 +51,7 @@ FIRSTHAND_MIN = 0.8
 LINT_RULES = ("bold-lead-item", "emoji", "decor-symbol", "bold-density")
 
 
-SURFACE = ("meta", "glue", "lint")
+SURFACE = ("meta", "caveat", "glue", "lint")
 
 
 class Check(BaseModel):
@@ -68,6 +70,7 @@ class CheckReport(BaseModel):
     chars: int
     checks: list[Check]
     sources: dict[int, list[str]] = {}
+    figures: list[dict] = []
 
     def failed(self) -> list[Check]:
         return [c for c in self.checks if c.passed is False]
@@ -353,9 +356,11 @@ READER_PROMPT_JA = DATA_NOTE_JA + """
 - term: 説明なしに使われている用語・略語・この記事で作られた言葉（初めて出る所で、何であるかが書かれていない）
 - number: 何を測ったか・何と比べたか・なぜ大事かが書かれていない数値や指標
 - jump: 前提が抜けていて、前の文から次の文へ論理が飛んでいる所
+- density: 一つの段落や文に数値・項目・比較が詰まっていて、表や番号付きリストにした方が読みやすい所（fix に、どの形にするかを書く）
+- figure: 文だけでは関係や流れがつかみにくく、図があると分かりやすい所（fix に、何を示す図かを 1 文で書く）。すでに `<!-- 図: … -->` の目印がある所は挙げない
 
 それぞれについて:
-- kind: term / number / jump
+- kind: term / number / jump / density / figure
 - quote: 下書きの中の該当する文字列を、そのまま写す（1 文の中の 40 字くらいまで。言い換えない）
 - why: この読者にとって何が分からないかを 1 文で
 - fix: 何を足せば分かるかを 1 文で
@@ -371,8 +376,9 @@ READER_PROMPT_JA = DATA_NOTE_JA + """
 
 {draft}"""
 
-READER_KIND_LABEL = {"term": "用語", "number": "数字", "jump": "飛躍"}
-READER_MAX = 12
+READER_KIND_LABEL = {"term": "用語", "number": "数字", "jump": "飛躍", "density": "密度", "figure": "図"}
+FORM_KINDS = ("density", "figure")
+READER_MAX = 16
 
 
 def reader_schema() -> dict:
@@ -406,10 +412,18 @@ def parse_reader(data: dict, draft: str, units: list[Unit]) -> list[dict]:
 
 
 def check_reader(findings: list[dict], audience: str) -> Check:
+    findings = [f for f in findings if f["kind"] not in FORM_KINDS]
     placed = sum(f["placed"] for f in findings)
     return _c("reader", f"読者（{audience}）が初めて読んで分からない所 → 無い", not findings, len(findings),
               f"用語 {sum(f['kind'] == 'term' for f in findings)}・数字 {sum(f['kind'] == 'number' for f in findings)}・"
               f"飛躍 {sum(f['kind'] == 'jump' for f in findings)}（本文で位置が分かったもの {placed}）", findings)
+
+
+def check_form(findings: list[dict], audience: str) -> Check:
+    findings = [f for f in findings if f["kind"] in FORM_KINDS]
+    return _c("form", f"読者（{audience}）にとって、表・リストにすると読みやすい所や、図があると分かる所 → 無い", not findings,
+              len(findings), f"密度 {sum(f['kind'] == 'density' for f in findings)}・"
+              f"図 {sum(f['kind'] == 'figure' for f in findings)}", findings)
 
 
 def check_length(chars: int, target: int) -> Check:
@@ -438,8 +452,14 @@ def run_checks(name: str, draft: str, p: Project, units: list[Unit], d: Design, 
         checks = [check_drop_absent(f), check_deep_present(f), check_deep_space(f), check_firsthand(f),
                   check_takeaways(f), check_fabrication(f), check_numbers(draft, material),
                   check_links(urls, links.result() if links else None), check_skips(f), check_asides(f),
-                  check_reader(parse_reader(reader.result(), draft, units), p.audience), *surface.result(), check_length(draft_chars(dunits), d.target_length)]
-    return CheckReport(draft=name, chars=draft_chars(dunits), checks=checks, sources=m.sources)
+                  *reader_checks(parse_reader(reader.result(), draft, units), p.audience), *surface.result(),
+                  check_length(draft_chars(dunits), d.target_length)]
+    return CheckReport(draft=name, chars=draft_chars(dunits), checks=checks, sources=m.sources,
+                       figures=figure_markers(draft))
+
+
+def reader_checks(findings: list[dict], audience: str) -> list[Check]:
+    return [check_reader(findings, audience), check_form(findings, audience)]
 
 
 def surface_hits(draft: str, units: list[Unit], meta: Provider | None, votes: Votes) -> SurfaceReport:
@@ -454,13 +474,16 @@ def surface_hits(draft: str, units: list[Unit], meta: Provider | None, votes: Vo
 def surface_checks(draft: str, units: list[Unit], meta: Provider | None, votes: Votes, keep: set[str]) -> list[Check]:
     sr = surface_hits(draft, units, meta, votes)
     kept = [h for h in sr.hits if text_hash(h.text) in keep]
-    meta_hits = [h for h in sr.hits if h.category != GLUE and h not in kept]
+    meta_hits = [h for h in sr.hits if h.category not in (GLUE, CAVEAT) and h not in kept]
+    caveat_hits = [h for h in sr.hits if h.category == CAVEAT and h not in kept]
     glue_hits = [h for h in sr.hits if h.category == GLUE and h not in kept]
     runs = sr.runs_used or None
     how = f"{runs} 回の判定の多数決" if runs else "規則だけ"
     out = [_c("meta", "メタ言説 → 無い", not meta_hits, len(meta_hits),
               how + (f"。残すと決めた文 {len(kept)} は数えない" if kept else ""),
               [{"id": h.id, "category": h.category, "text": h.text, "votes": h.votes} for h in meta_hits], runs),
+           _c("caveat", "結論の読み方を変えない保守的な但し書き → 無い", not caveat_hits, len(caveat_hits), how,
+              [{"id": h.id, "text": h.text, "votes": h.votes} for h in caveat_hits], runs),
            _c("glue", "材料の事実を運ばない、話題を読者の役立ちに結びつけるだけの文 → 無い", not glue_hits, len(glue_hits),
               f"{how}。材料の文をほぼ繰り返すので除いた文 {len(sr.traced)}",
               [{"id": h.id, "text": h.text, "votes": h.votes} for h in glue_hits], runs)]
@@ -486,6 +509,9 @@ def report_text(rep: CheckReport) -> str:
                 lines.append("      - " + " / ".join(f"{k}: {v}" for k, v in it.items()))
             if len(c.items) > 8:
                 lines.append(f"      …ほか {len(c.items) - 8} 件")
+    if rep.figures:
+        lines.append(f"情報  図の目印 {len(rep.figures)} 個（失敗ではない。後で図にする所）")
+        lines += [f"      - {f['text']}（近く: {f['near']}）" for f in rep.figures]
     return "\n".join(lines) + "\n"
 
 
@@ -495,7 +521,7 @@ def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str, votes:
     keep = KeepStore(wd).hashes()
     if surface_only:
         rep = CheckReport(draft=name, chars=draft_chars(info_units(text)),
-                          checks=surface_checks(text, wd.units(), meta, votes, keep))
+                          checks=surface_checks(text, wd.units(), meta, votes, keep), figures=figure_markers(text))
     else:
         rep = run_checks(name, text, wd.project(), wd.units(), wd.design(), judge, meta, votes, keep, fetch)
     stem = check_stem(name, surface_only)

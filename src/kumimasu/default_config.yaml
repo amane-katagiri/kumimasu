@@ -8,6 +8,7 @@ providers:
   detector: claude-cli:sonnet
   rewriter: claude-cli:sonnet
   auto: claude-cli:sonnet
+  digester: claude-cli:sonnet
 surface:
   runs: 3
   min_votes: 2

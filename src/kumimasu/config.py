@@ -15,7 +15,7 @@ from .errors import ConfigError
 ENV = "KUMIMASU_CONFIG"
 USER_FILE = Path("~/.config/kumimasu/config.yaml")
 PROJECT_FILE = "kumimasu.yaml"
-ROLES = ("writer", "baseline", "researcher", "judge", "interviewer", "designer", "detector", "rewriter", "auto")
+ROLES = ("writer", "baseline", "researcher", "judge", "interviewer", "designer", "detector", "rewriter", "auto", "digester")
 KEYS: dict[str, type] = {**{f"providers.{r}": str for r in ROLES},
                          "surface.runs": int, "surface.min_votes": int, "surface.max_rounds": int,
                          "cache_dir": str, "rules_file": str, "serve.port": int, "serve.poll_seconds": float,
@@ -196,6 +196,7 @@ TEMPLATE = """# kumimasu の設定。書いた値だけが下の層（ユーザ�
 #   detector: claude-cli:sonnet   # 表面の検出（メタ言説・つなぎの効用文）
 #   rewriter: claude-cli:sonnet   # 最終チェックの書き直す
 #   auto: claude-cli:sonnet       # auto
+#   digester: claude-cli:sonnet   # digest（仕上がった文書を自己完結したメモに書き直す。ツールなし）
 # surface:
 #   runs: 3
 #   min_votes: 2

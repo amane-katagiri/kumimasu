@@ -14,7 +14,7 @@
   --no: var(--sage); --partial: var(--ochre); --yes: var(--stone); --answer: var(--accent);
   --ok: var(--sage); --bad: var(--brick); --code-bg: #efede8;
   --k-meta: #a8812b; --k-glue: #8a6b9b; --k-lint: #8a8781; --k-drop: #b45a49; --k-fabrication: #8e3c4e;
-  --k-number: #4a7795; --k-link: #3b827c; --k-user: #5f8655; --k-reader: #b0663a;
+  --k-number: #4a7795; --k-link: #3b827c; --k-user: #5f8655; --k-reader: #b0663a; --k-form: #5d7f8f; --k-caveat: #957a5c;
   --pop-shadow: 0 10px 30px rgb(40 38 34 / .09);
   --font: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
     "Noto Sans JP", "Noto Sans CJK JP", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
@@ -32,7 +32,7 @@
     --sage: #94b396; --sage-text: #a6c3a7; --ochre: #d0ae66; --ochre-text: #d8b977; --brick: #d98f84; --stone: #77746e;
     --code-bg: #282926;
     --k-meta: #d4ae5e; --k-glue: #b9a0cb; --k-lint: #a29e96; --k-drop: #e0947f; --k-fabrication: #d98b9c;
-    --k-number: #8fb5cf; --k-link: #7fbfb6; --k-user: #9cbf8e; --k-reader: #e0a47c;
+    --k-number: #8fb5cf; --k-link: #7fbfb6; --k-user: #9cbf8e; --k-reader: #e0a47c; --k-form: #9cc0cf; --k-caveat: #cdb393;
     --pop-shadow: 0 10px 30px rgb(0 0 0 / .35);
   }
 }
@@ -187,6 +187,16 @@ main { flex: 1; }
 .terms li.missing .lv { color: var(--k-reader); }
 .terms .refline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); color: var(--ink-3); font-size: var(--t-s); }
 .unit .head .promoted { color: var(--accent); }
+.unit .head .path { overflow-wrap: anywhere; }
+.unit .head .orig { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 2px; }
+.digest-note { margin: 0 0 var(--s4); padding: var(--s2) 0 var(--s2) var(--s3); border-left: 2px solid var(--accent); font-size: var(--t-s); color: var(--ink-2); }
+.digest-note p { margin: 0 0 var(--s1); }
+.digest-note p:last-child { margin-bottom: 0; }
+.digest-note b { color: var(--ink); font-weight: 600; }
+.digest-note ul { margin: 0 0 var(--s1); padding-left: 1.2em; }
+.ref-pop .origs { margin-top: var(--s3); padding-top: var(--s2); border-top: 1px solid var(--line-soft); }
+.ref-pop .origs .o { margin: var(--s2) 0 0; }
+.ref-pop .origs .o .text { max-height: 18vh; color: var(--ink-2); font-size: var(--t-s); }
 
 #foot { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s5);
   padding: var(--s3) var(--gutter); background: var(--bg); border-top: 1px solid var(--line); }
@@ -242,6 +252,16 @@ main { flex: 1; }
 .fc-article th, .fc-article td { border-bottom: 1px solid var(--line); padding: .35em .8em .35em 0; text-align: left; }
 .fc-article .img-ph { display: block; border: 1px dashed var(--line); border-radius: var(--r-l); padding: 1em; text-align: center; color: var(--ink-3); font-size: var(--t-s); }
 .fc-article > .note { margin-bottom: var(--s5); }
+.fig-ph { display: block; margin: 0 0 1.1em; padding: .9em 1em; border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: var(--r-l);
+  background: color-mix(in srgb, var(--accent) 5%, transparent); color: var(--ink-2); font-size: var(--t-s); line-height: 1.7; }
+.fig-ph b { display: inline-block; margin-right: var(--s2); padding: 0 7px; border-radius: 999px; font-weight: 600; font-size: 11.5px; color: var(--accent); box-shadow: inset 0 0 0 1px currentColor; }
+.fig-ph.inline { display: inline; margin: 0 2px; padding: 1px 6px; border-radius: var(--r); }
+.fig-ph.flash { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fc-figs { margin: 0 0 var(--s4); padding: var(--s2) 0 var(--s2) var(--s3); border-left: 2px solid var(--accent); font-size: var(--t-s); color: var(--ink-2); }
+.fc-figs .label { margin-bottom: 2px; }
+.fc-figs button { display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: var(--r); padding: var(--s1) var(--s2); margin: 0 calc(-1 * var(--s2)); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.fc-figs button:hover { background: var(--fill); }
+.fc-figs button span { display: block; color: var(--ink-3); font-size: var(--t-s); }
 mark.fc { background: color-mix(in srgb, var(--c) 17%, transparent); color: inherit; border-bottom: 2px solid var(--c); cursor: pointer; border-radius: 2px; }
 mark.fc:hover { background: color-mix(in srgb, var(--c) 28%, transparent); }
 mark.fc.keep { background: transparent; border-bottom-style: dotted; }
@@ -327,6 +347,7 @@ mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-
 <div class="layout" id="view-design">
   <section>
     <h2>材料</h2>
+    <div id="digest-note" class="digest-note" hidden></div>
     <div class="legend">
       <span><i class="dot" style="--c: var(--no)"></i>手元だけ</span>
       <span><i class="dot" style="--c: var(--partial)"></i>一部は検索で届く</span>
@@ -347,6 +368,7 @@ mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-
   <ol class="steps" id="wait-steps"></ol>
   <p class="note" id="wait-next"></p>
   <div id="wait-note"></div>
+  <div id="wait-digest" class="digest-note" hidden></div>
 </div>
 <div id="view-final" hidden>
   <div class="fc-bar">
@@ -358,6 +380,7 @@ mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-
   <div class="fc-grid">
     <article id="fc-article" class="fc-article"></article>
     <aside class="fc-side">
+      <div id="fc-figs" class="fc-figs" hidden></div>
       <div class="side-head"><h2>指摘</h2><span class="fc-count" id="fc-count"></span></div>
       <div class="fc-legend" id="fc-legend"></div>
       <div id="fc-items"></div>
@@ -426,7 +449,8 @@ function matches(f, u) {
 }
 
 const visible = (u) => matches(S.filter, u);
-const unitById = (id) => S.data.units.find((u) => u.id === id);
+const unitById = (id) => id.startsWith("raw:") ? S.data.originals[id.slice(4)] : S.data.units.find((u) => u.id === id);
+const unitWhere = (u) => u.path || [u.source, u.section].filter(Boolean).join(" / ");
 const refs = (ids) => ids.map((i) => `<button type="button" class="ref" data-ref="${esc(i)}" aria-haspopup="dialog">${esc(i)}</button>`).join("");
 
 function renderFilters() {
@@ -449,7 +473,7 @@ function renderUnits() {
     const use = useOf(u.id);
     const color = u.origin === "answer" ? "var(--answer)" : COLOR[u.searchable];
     const tag = u.origin === "answer" ? "回答" : L().searchable[u.searchable];
-    const where = [u.source, u.section].filter(Boolean).join(" / ");
+    const where = unitWhere(u);
     const body = u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`;
     const isSkip = d && d.skip.some((x) => x.units.includes(u.id));
     const isAside = d && d.aside.some((x) => x.id === u.id);
@@ -461,10 +485,11 @@ function renderUnits() {
     row.className = "unit" + (use === "drop" ? " drop" : "");
     row.id = `unit-${u.id}`;
     const same = u.members && u.members.length ? `<span>同じ内容: ${u.members.map(esc).join(", ")}</span>` : "";
+    const orig = u.origin === "digest" && u.from && u.from.length && S.data.originals[u.from[0]] ? `<span class="orig">元${origRefs(u.from)}</span>` : "";
     const promoted = d && use !== "drop" ? d.units.find((x) => x.id === u.id && x.promoted_for) : null;
     const pr = promoted ? `<span class="promoted">用語「${esc(promoted.promoted_for)}」の説明として触れる</span>` : "";
     const ctx = u.context ? `<div class="why">問い: ${esc(u.context)}</div>` : "";
-    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span>${esc(where)}</span>` : ""}${same}${pr}</div>${ctx}${body}</div>${seg}`;
+    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span class="path">${esc(where)}</span>` : ""}${orig}${same}${pr}</div>${ctx}${body}</div>${seg}`;
     row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => save("/api/design", { units: { [u.id]: b.dataset.use } }, true)));
     row.querySelector("button[data-noise=skip]")?.addEventListener("click", () =>
       save("/api/design", { toggle_skip: { unit: u.id, on: !isSkip } }, true));
@@ -473,6 +498,25 @@ function renderUnits() {
     box.appendChild(row);
   }
   if (!box.children.length) box.innerHTML = `<p class="note">該当する単位はありません。</p>`;
+}
+
+const origRefs = (ids, n = 6) => ids.slice(0, n).map((i) => `<button type="button" class="ref" data-ref="raw:${esc(i)}" aria-haspopup="dialog" title="digest 前の単位">${esc(i)}</button>`).join("") + (ids.length > n ? `<span>ほか ${ids.length - n}</span>` : "");
+
+function renderDigest() {
+  const boxes = [$("#digest-note"), $("#wait-digest")];
+  const dg = S.data.project.digest;
+  const show = S.viewing === "interview" || S.viewing === "design";
+  const html = !dg || !show || (!dg.recommended && !dg.done_at) ? "" : digestHtml(dg);
+  boxes.forEach((b) => { b.hidden = !html; b.innerHTML = html; });
+}
+
+function digestHtml(dg) {
+  if (dg.done_at) {
+    return `<p><b>材料は自己完結したメモに書き直してあります</b>（digest、${num(dg.units_before)} 単位 → ${num(dg.units_after)} 単位）。各単位の「元」から、書き直す前の単位を見られます。</p>`;
+  }
+  return `<p><b>材料が、仕上がった文書のようです。</b>文書から切り出した単位は、見出しや前後の文が無いと何の話か分かりにくくなります。</p>
+    <ul>${dg.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <p>エージェントに頼むと、目印付けとインタビューの前に、節ごとに自己完結したメモへ書き直せます（<code>kumimasu digest DIR</code>。任意で、節ごとに LLM を呼びます。もう質問があるときは作り直しになります）。</p>`;
 }
 
 function renderInterview() {
@@ -509,7 +553,7 @@ function renderDesign() {
     ${field("target_length", "目標の字数", "", `<div class="length"><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}"><div class="counts" id="counts"></div></div><div id="load"></div>`)}
     <h3>組み立て</h3>
     ${area("order", "順番の手がかり", "1 行に 1 つ", d.order.join("\n"))}
-    ${area("forms", "形", "1 行に 1 つ。内容が並び・手順・比較・コードのときに使う形", d.forms.join("\n"))}
+    ${area("forms", "形", "1 行に 1 つ。書き手は必ず使う。ほかの所にも、詰まった比較や手順なら表やリストを足せる", d.forms.join("\n"))}
     ${area("form_prefs", "形の好み", "設計と下書きの依頼にそのまま載る", d.form_prefs)}
     <h3>書く範囲</h3>
     ${area("avoid", "書かない話題", "1 行に 1 つ。下書きの依頼に話題の名前だけが載る", d.avoid.join("\n"))}
@@ -658,7 +702,7 @@ function renderAll() {
   $("#topic").textContent = p.topic;
   document.title = "記事を書く: " + p.topic;
   $("#meta").innerHTML = [`読者 ${p.audience}`, `種類 ${p.kind}`, `目標 ${p.length} 字`, `材料 ${S.data.units.length} 単位`, `ラウンド ${S.data.stage.round}`].map((x) => `<span>${esc(x)}</span>`).join("");
-  renderUnits(); renderInterview(); renderDesign();
+  renderUnits(); renderInterview(); renderDesign(); renderDigest();
 }
 
 async function boot() {
@@ -723,6 +767,7 @@ function showScreen(s) {
   if (screen === "wait") renderWait(wait, last);
   $("#confirm-bar").hidden = !editable;
   renderStages();
+  renderDigest();
   if (screen === "final") openFinal().catch((e) => status("読み込めません: " + e.message, true));
 }
 
@@ -801,14 +846,17 @@ function openRef(a, pinned) {
   if (REF.anchor && REF.anchor !== a) REF.anchor.classList.remove("on");
   Object.assign(REF, { id: u.id, pinned, anchor: a });
   a.classList.add("on");
-  const tag = u.origin === "answer" ? "回答" : L().searchable[u.searchable];
-  const color = u.origin === "answer" ? "var(--answer)" : COLOR[u.searchable];
-  const where = [u.source, u.section].filter(Boolean).join(" / ");
+  const raw = a.dataset.ref.startsWith("raw:");
+  const tag = raw ? "digest 前の単位" : u.origin === "answer" ? "回答" : L().searchable[u.searchable];
+  const color = raw ? "var(--line)" : u.origin === "answer" ? "var(--answer)" : COLOR[u.searchable];
+  const where = unitWhere(u);
+  const origs = !raw && u.origin === "digest" ? (u.from || []).map((i) => S.data.originals[i]).filter(Boolean) : [];
   const pop = $("#ref-pop");
   pop.innerHTML = `<div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span>${esc(where)}</span>` : ""}</div>
     ${u.context ? `<div class="head">問い: ${esc(u.context)}</div>` : ""}
     ${u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`}
-    ${$("#view-design").hidden ? "" : `<div class="acts"><button type="button" class="btn quiet" data-jump="${esc(u.id)}">材料の一覧で見る</button></div>`}`;
+    ${origs.length ? `<div class="origs"><span class="label">書き直す前の単位（digest の元）</span>${origs.map((o) => `<div class="o"><div class="head"><span class="id">${esc(o.id)}</span>${unitWhere(o) ? `<span>${esc(unitWhere(o))}</span>` : ""}</div>${o.kind === "code" ? `<pre>${esc(o.text)}</pre>` : `<div class="text">${linkify(o.text)}</div>`}</div>`).join("")}</div>` : ""}
+    ${$("#view-design").hidden || raw ? "" : `<div class="acts"><button type="button" class="btn quiet" data-jump="${esc(u.id)}">材料の一覧で見る</button></div>`}`;
   pop.querySelector("[data-jump]")?.addEventListener("click", () => jumpToUnit(u.id));
   placeFcPop(pop, a.getBoundingClientRect());
 }
@@ -944,7 +992,7 @@ async function loadDraft(name) {
   FC.viewing = false;
   FC.final = null;
   const r = await api(draftPath("review"));
-  FC.html = r.html; FC.items = r.items; FC.dirty = r.dirty;
+  FC.html = r.html; FC.items = r.items; FC.dirty = r.dirty; FC.figures = r.figures || [];
   renderUsed(r.used);
   if ($("#fc-diff").open) $("#fc-diff").close();
   paintFinal();
@@ -1007,6 +1055,7 @@ async function toggleResult() {
   markChanges(spanTable(art), r.changes);
   $("#fc-items").innerHTML = `<p class="note">反映の結果を表示しています。決定は元の下書きで変えます。</p>`;
   $("#fc-legend").hidden = true;
+  $("#fc-figs").hidden = true;
   $("#fc-count").textContent = "";
   setApplyEnabled();
   renderResult();
@@ -1069,6 +1118,23 @@ function paintFinal() {
     });
   }
   renderItems();
+  renderFigures();
+}
+
+function renderFigures() {
+  const box = $("#fc-figs");
+  const figs = FC.figures || [];
+  box.hidden = !figs.length || FC.viewing;
+  if (box.hidden) return;
+  box.innerHTML = `<span class="label">図の目印 ${figs.length}（指摘ではありません。確定した記事と一緒に渡り、後で図にします）</span>` +
+    figs.map((f, i) => `<button type="button" data-fig="${i}">${esc(f.text)}<span>近く: ${esc(f.near || f.heading || "（先頭）")}</span></button>`).join("");
+  box.querySelectorAll("button[data-fig]").forEach((b) => b.addEventListener("click", () => {
+    const el = $("#fc-article").querySelectorAll(".fig-ph")[+b.dataset.fig];
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1800);
+  }));
 }
 
 function rewriteBadge(it) {

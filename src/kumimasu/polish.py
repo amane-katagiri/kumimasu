@@ -9,7 +9,7 @@ from .check import Votes, dash_hits
 from .generate import DATA_NOTE_JA
 from .keep import KeepStore, text_hash
 from .llm import CountingProvider, ask_replacements
-from .surface import GLUE, detect_surface
+from .surface import CAVEAT, GLUE, detect_surface
 from .textutil import blocks, collapse_blank_lines, edit_text, locate, norm
 from .workdir import WorkDir
 
@@ -23,7 +23,7 @@ class Flag(BaseModel):
     text: str
 
 
-POLISH_RULES = ("meta", "glue", "dash")
+POLISH_RULES = ("meta", "caveat", "glue", "dash")
 
 
 POLISH_PROMPT_JA = DATA_NOTE_JA + """
@@ -32,6 +32,7 @@ POLISH_PROMPT_JA = DATA_NOTE_JA + """
 
 直し方:
 - 情報を運ばない文（道しるべ・決め台詞・「A ではなく B」の言い直し・立場や範囲の宣言・自分への但し書き）は、replacement を空文字にして消します。文の一部が情報を運んでいるなら、その情報だけを残した文に書き換えます。
+- 保守的な但し書き（caveat）は、結果の読み方を変えない限界・未確認の断りです。replacement を空文字にして消します。結果の読み方を変える条件（効く範囲・前提・比べた条件）を含むなら、その条件だけを残した文に書き換えます。
 - 主張の見出し（claim_heading）は、内容を指す短い名詞句に書き換えます。
 - つなぎの効用文（glue）は、話題を読者の役立ちや結果に結びつけるだけの文です。replacement を空文字にして消します。前に書いていない事実を含むなら、その事実だけを残した文に書き換えます。
 - ダッシュ（dash）を含む文は、ダッシュを使わない文に書き換えます。意味は変えません。
@@ -123,11 +124,11 @@ def find_flags(scope: str, full: str, provider: Provider, material: list[str], r
                keep: set[str]) -> tuple[list[Flag], int]:
     found: list[tuple[str, str]] = []
     used = 0
-    if "meta" in rules or GLUE in rules:
+    if {"meta", CAVEAT, GLUE} & set(rules):
         rep = detect_surface(scope, provider, material, votes.runs, votes.min_votes)
         used = rep.runs_used
         found += [(h.category, h.text) for h in rep.hits
-                  if (h.category == GLUE and GLUE in rules) or (h.category != GLUE and "meta" in rules)]
+                  if (h.category if h.category in (GLUE, CAVEAT) else "meta") in rules]
     if "dash" in rules:
         found += [("dash", s) for s in dash_hits(scope)]
     out, seen = [], set()

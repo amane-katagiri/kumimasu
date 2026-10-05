@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Kind = Literal["実用", "読み物", "調査"]
 Searchable = Literal["yes", "partial", "no"]
@@ -18,6 +18,16 @@ REGISTER_LABEL = {"keitai": "敬体（です・ます）", "joutai": "常体（�
 SOURCES: tuple[str, ...] = ("human-ui", "agent-chat", "auto", "agent")
 
 
+class DigestState(BaseModel):
+    recommended: bool = False
+    reasons: list[str] = []
+    stats: dict = {}
+    done_at: str = ""
+    units_before: int = 0
+    units_after: int = 0
+    calls: int = 0
+
+
 class Project(BaseModel):
     topic: str
     audience: str
@@ -29,20 +39,29 @@ class Project(BaseModel):
     round: int = 1
     review_draft: str = ""
     config: dict = {}
+    digest: DigestState = Field(default_factory=lambda: DigestState())
 
 
 class Unit(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
     id: str
-    origin: Literal["material", "answer"] = "material"
+    origin: Literal["material", "digest", "answer"] = "material"
     source: str = ""
     kind: str = "prose"
     section: str = ""
+    path: str = ""
+    from_units: list[str] = Field(default=[], alias="from")
     text: str
     searchable: Searchable | None = None
     found_in: list[str] = []
     cluster: str = ""
     members: list[str] = []
     context: str = ""
+
+    @property
+    def is_material(self) -> bool:
+        return self.origin != "answer"
 
     @property
     def firsthand(self) -> bool:

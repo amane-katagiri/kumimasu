@@ -9,9 +9,10 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel
 
+from .digest import assess
 from .errors import StepError
 from .files import atomic_write, create_new, dump_yaml
-from .infounits import parse_material
+from .infounits import PATH_SEP, parse_material
 from .model import Design, Interview, Project, Unit
 
 T = TypeVar("T", bound=BaseModel)
@@ -35,6 +36,7 @@ class WorkDir:
 
         self.project_file = self.root / "project.yaml"
         self.units_file = self.root / "units.yaml"
+        self.raw_units_file = self.root / "units.raw.yaml"
         self.interview_file = self.root / "interview.yaml"
         self.material_dir = self.root / "material"
         self._project: tuple[tuple[int, int, int], Project] | None = None
@@ -83,6 +85,12 @@ class WorkDir:
     def material_units(self) -> list[Unit]:
         return [Unit.model_validate(u) for u in self._yaml(self.units_file, "init") or []]
 
+    def raw_units(self) -> list[Unit]:
+        """The units as init split them, before a digest replaced them (the digest's `from` points here)."""
+        if not self.raw_units_file.exists():
+            return []
+        return [Unit.model_validate(u) for u in self._yaml(self.raw_units_file, "init") or []]
+
     def interview(self) -> Interview:
         return self._load(self.interview_file, Interview, "interview")
 
@@ -104,6 +112,9 @@ class WorkDir:
 
     def save_units(self, units: list[Unit]) -> None:
         atomic_write(self.units_file, dump_yaml([u.model_dump(exclude_defaults=True) for u in units]))
+
+    def save_raw_units(self, units: list[Unit]) -> None:
+        atomic_write(self.raw_units_file, dump_yaml([u.model_dump(exclude_defaults=True) for u in units]))
 
     def save_interview(self, iv: Interview) -> None:
         atomic_write(self.interview_file, dump_yaml(iv.model_dump()))
@@ -148,8 +159,10 @@ def init_workdir(root: Path, project: Project, materials: list[Path]) -> tuple[W
     units: list[Unit] = []
     for name in names:
         for u in parse_material(wd.material_dir / name):
-            units.append(Unit(id=f"m{len(units) + 1}", source=name, kind=u.kind, section=u.section, text=u.text))
-    wd.save_project(project.model_copy(update={"materials": names, "created_at": now()}))
+            units.append(Unit(id=f"m{len(units) + 1}", source=name, kind=u.kind, section=u.section,
+                              path=PATH_SEP.join([name, u.path] if u.path else [name]), text=u.text))
+    wd.save_project(project.model_copy(update={"materials": names, "created_at": now(),
+                                               "digest": assess(wd.material_dir, names, units)}))
     wd.save_units(units)
     return wd, units
 

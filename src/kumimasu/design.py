@@ -28,8 +28,10 @@ DESIGN_PROMPT_JA = DATA_NOTE_JA + """
   - drop: 書かない。検索で届く一般的な説明は、文脈として要らなければ drop にします。著者が書かないと言ったものも drop。
   why には理由を短く書きます。
 - order: 話の順番についての緩い手がかりを 0–4 個（例:「q2 の動機から始める」）。節の一覧は作りません。
-- forms: 内容が並び・手順・比較・コードのときに使う形（表・コード・箇条書き）を、どの単位に使うかと合わせて 0–4 個。
+- forms: 内容が並び・手順・比較・コードのときに使う形（表・コード・番号付きリスト・箇条書き）を、どの単位に使うかと合わせて 0–4 個。ここに挙げた形は書き手が必ず使います（書き手はほかの所にも表やリストを足せます）。
 - research: 記事のために、ウェブで確かめるか補うとよい一般的な事柄を 0–5 個。調査役にはこの一覧と、題・読者・ねらい・持ち帰りだけが渡り、材料と回答は渡りません。だから材料の文・著者の体験・著者の環境やプロジェクトに固有の名前は写さず、それぞれ 40 字以内の名詞句か問いにします。
+
+限界・未確認・注意の但し書きの単位は、使う単位の主張の読み方を変えるときだけ deep か mention にし、why にどの主張の読み方をどう変えるかを書きます。読み方を変えない保守的な断り（標本が少ない、探索的、未検証の可能性など）は drop にします。
 
 著者の回答のうち、選び方の指示（「伝えた方がいい」「絞ってよい」「いらない」など）だけで材料としての事実を含まないものは、その指示をほかの単位の use に反映し、回答そのものは drop にします。
 
@@ -96,7 +98,7 @@ def design(wd: WorkDir, provider: Provider, judge: Provider, defaults: DesignDef
         raise StepError(f"{wd.design_file} はすでにあります。作り直すなら --overwrite を付けてください")
     p = wd.project()
     units = wd.units()
-    if any(u.searchable is None for u in units if u.origin == "material"):
+    if any(u.searchable is None for u in units if u.is_material):
         raise StepError("目印の無い単位があります。先に `kumimasu mark` を実行してください")
     d = parse_design(ask_json(provider, design_prompt(p, units, defaults.forms), design_schema()), p, units,
                      defaults.rules)
@@ -163,7 +165,7 @@ def parse_noise(data: dict, d: Design, units: list[Unit], skip_max: int, aside_m
     skips, taken = [], set()
     for row in rows(data, "skip"):
         label = str(row.get("label", "")).strip()
-        ids = [i for i in row.get("units", []) if i in by_id and by_id[i].origin == "material"
+        ids = [i for i in row.get("units", []) if i in by_id and by_id[i].is_material
                and by_id[i].searchable in ("yes", "partial") and d.use_of(i) != "deep" and i not in taken]
         if label and len(label) <= LABEL_MAX and len(skips) < skip_max:
             taken.update(ids)

@@ -32,6 +32,8 @@ from .cli_common import (
 from .config import Config
 from .design import design as run_design
 from .design import noise_workdir, review_conflicts, sync_design
+from .digest import digest as run_digest
+from .digest import digest_lines, reassess
 from .draft import draft as run_draft
 from .factcheck import check_urls
 from .files import private_dir
@@ -69,6 +71,33 @@ def init(path: DirArg,
             private_dir(root)
         _, units = init_workdir(path, Project(topic=topic, audience=audience, kind=kind, length=length), files)
     typer.echo(f"wrote {path / 'project.yaml'} and {path / 'units.yaml'} ({len(units)} units from {len(files)} files)")
+    for line in digest_lines(WorkDir(path).project().digest):
+        typer.echo(line)
+
+
+@app.command()
+def digest(path: DirArg, provider: ProviderOpt = None,
+           force: Annotated[bool, typer.Option("--force", help="Go on although questions exist (they move to "
+                                               "interview.before-digest.yaml and must be made again)")] = False,
+           assess_only: Annotated[bool, typer.Option("--assess", help="Only re-run the deterministic check of whether "
+                                                     "the material looks like finished documents (no LLM)")] = False) -> None:
+    """Rewrite finished, dense documents into self-contained memos before mark/interview: one call per heading section
+    (small sections of a file share a call), code and table rows kept as they are. The original units move to
+    DIR/units.raw.yaml and each new unit records `from` (the original ids) and `path`."""
+    wd = cc.workdir(path, "interview", action="材料の書き直し（digest）")
+    if assess_only:
+        with errors():
+            st = reassess(wd)
+        typer.echo(f"digest recommended: {'yes' if st.recommended else 'no'}")
+        for r in st.reasons:
+            typer.echo(f"  - {r}")
+        return
+    cfg = cc.config(path)
+    with errors():
+        res = run_digest(wd, cc.llm(cfg, "digester", provider), force)
+    typer.echo(f"wrote {wd.units_file}: {res.before} units -> {len(res.units)} units ({res.memos} memos, "
+               f"{res.kept} kept as they were), {res.calls} calls; originals in {wd.raw_units_file}")
+    typer.echo(f"next: kumimasu mark {path} && kumimasu interview {path}")
 
 
 @app.command()
@@ -257,14 +286,14 @@ def revise(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
 def polish(path: DirArg, draft_name: DraftOpt = None,
            provider: Annotated[str | None, typer.Option("--provider", help="Default: config providers.detector")] = None,
            yes: Annotated[bool, typer.Option("--yes", help="Apply: delete or rewrite only the flagged sentences")] = False,
-           rules: Annotated[str, typer.Option("--rules", help="Comma-separated: meta, glue, dash")] = "meta,glue,dash",
+           rules: Annotated[str, typer.Option("--rules", help="Comma-separated: meta, caveat, glue, dash")] = "meta,caveat,glue,dash",
            runs: Annotated[int | None, typer.Option("--runs", min=1, help="Detection runs per round (default: config)")] = None,
            min_votes: Annotated[int | None, typer.Option("--min-votes", min=1, help="Runs that must pick a sentence "
                                                          "(default: config)")] = None,
            max_rounds: Annotated[int | None, typer.Option("--max-rounds", min=1, help="Default: config")] = None,
            out: Annotated[str | None, typer.Option("--out", help="File name inside DIR (default: <draft>.polished.md)")] = None) -> None:
-    """Surface pass: majority-vote detection of meta-discourse, glue and dashes; with --yes, rewrite only those sentences
-    and re-detect around the edits until nothing stable is left."""
+    """Surface pass: majority-vote detection of meta-discourse, conservative caveats, glue and dashes; with --yes,
+    rewrite only those sentences and re-detect around the edits until nothing stable is left."""
     chosen = tuple(r.strip() for r in rules.split(",") if r.strip())
     if not chosen or any(r not in POLISH_RULES for r in chosen):
         raise typer.BadParameter(f"--rules は {', '.join(POLISH_RULES)} からカンマ区切りで選んでください")

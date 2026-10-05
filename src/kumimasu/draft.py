@@ -77,6 +77,32 @@ def load_section(d: Design, units: list[Unit]) -> str:
             "一つの段落に材料を詰め込んで、説明の無い名前や数字を並べないでください。")
 
 
+FIGURE_MARK = "<!-- 図:"
+
+
+def forms_section(d: Design) -> str:
+    rules = d.active_rules()
+    parts = []
+    if d.forms:
+        parts.append("設計で決めた形（必ず使う）:\n" + _bullets(d.forms))
+    if d.form_prefs:
+        parts.append(f"著者の好み: {d.form_prefs}")
+    parts.append("ほかの所でも、内容が詰まっている所や比べている所（数値が並ぶ比較、順序のある手順など）は、"
+                 "散文に詰め込まずに表や番号付きリストにして構いません。決まりにある箇条書きの禁止（太字で始まる箇条書き、"
+                 "同じ形の並列を何段も続けること）は、ここでも守ります。")
+    if any(FIGURE_MARK in r for r in rules):
+        parts.append("図があると分かりやすい所には、図を描かずに、その場所に `<!-- 図: 何を示す図か -->` の目印を 1 行で置きます"
+                     "（目印は後で人や別の工程が図にします）。")
+    return "## 形\n\n" + "\n\n".join(parts)
+
+
+def caveat_section(d: Design) -> str:
+    if not any("但し書き" in r for r in d.active_rules()):
+        return ""
+    return ("## 但し書き\n\n限界・未確認・注意の断りは、それで結果の読み方が変わる所にだけ、まとめて 1 か所で書きます。"
+            "読み方を変えない保守的な断り（標本が少ない、探索的、未検証の可能性など）は書きません。")
+
+
 def design_block(p: Project, d: Design, units: list[Unit], drop_list: str | None = None) -> str:
     deep, mention, drop = (kept(d, units, x) for x in ("deep", "mention", "drop"))
     parts = [
@@ -93,9 +119,8 @@ def design_block(p: Project, d: Design, units: list[Unit], drop_list: str | None
         drop_section(d, drop, drop_list or d.drop_list),
         *noise_sections(d, units),
         "## 順番の手がかり（緩いもの。節の構成はあなたが決める）\n\n" + _bullets(d.order) if d.order else "",
-        "## 形（内容が並び・手順・比較・コードのときだけ使う）\n\n"
-        + "\n".join(x for x in (_bullets(d.forms) if d.forms else "", f"著者の好み: {d.form_prefs}" if d.form_prefs else "") if x)
-        if d.forms or d.form_prefs else "",
+        forms_section(d),
+        caveat_section(d),
         "## 決まり\n\n" + _bullets(d.active_rules()) if d.active_rules() else "",
     ]
     return "\n\n".join(x for x in parts if x)

@@ -381,7 +381,7 @@ def test_blocks_keep_fences_and_neighborhood_adds_heading():
 
 def test_default_rules_packaged_and_rules_file(tmp_path):
     packaged = [r.text for r in rules.default_rules()]
-    assert len(packaged) == 16 and "この記事で作った用語や指標は、初出で一言説明する" in packaged and "読者が知っている前提を丁寧に言い直さない。説明は一度だけ、必要な所で" in packaged
+    assert len(packaged) == 20 and "この記事で作った用語や指標は、初出で一言説明する" in packaged and "読者が知っている前提を丁寧に言い直さない。説明は一度だけ、必要な所で" in packaged
     assert any("「まとめ」の節で繰り返さない" in t for t in packaged)
     user = tmp_path / "user.yaml"
     user.write_text("- 自分のルール\n", encoding="utf-8")

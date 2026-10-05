@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from . import ops
 from .design import sync_design
-from .model import USE_LABEL, Unit
+from .digest import digest_lines
+from .figures import figure_markers
+from .model import USE_LABEL, DigestState, Unit
 from .review import DECISION_LABEL, ReviewContext, final_name
 from .terms import material_load, term_states
 from .textutil import excerpt
@@ -31,7 +33,8 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
     p = wd.project()
     part = stage or ("review" if p.stage == "done" else p.stage)
     snap: dict = {"topic": p.topic, "stage": p.stage, "round": p.round, "next": NEXT_STEP[p.stage], "showing": part,
-                  "last_handoff": (ops.handoffs(wd) or [None])[-1], "restart": ops.last_restart(wd)}
+                  "last_handoff": (ops.handoffs(wd) or [None])[-1], "restart": ops.last_restart(wd),
+                  "digest": p.digest.model_dump() if part in ("interview", "design") else None}
     if part == "interview" and wd.interview_file.exists():
         by = {u.id: u for u in wd.units()}
         snap["interview"] = [{"id": q.id, "question": q.question, "context": q.context, "answer": q.answer,
@@ -57,7 +60,7 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
             rev = ctx.review
             snap["review"] = {
                 "draft": base, "final": final_name(base) if (wd.root / final_name(base)).is_file() else None,
-                "needs_apply": ctx.needs_apply(),
+                "needs_apply": ctx.needs_apply(), "figures": figure_markers(ctx.src),
                 "items": [{"id": i.id, "kind": i.kind, "category": i.category, "votes": i.votes, "decision": i.decision,
                            "note": i.note, "text": _short(i.text), "placed": i.start is not None,
                            "rewrite": ({"result": _short(i.rewrite.result, 120), "source": i.rewrite.source}
@@ -106,6 +109,8 @@ def text(snap: dict) -> str:
     if r := snap.get("restart"):
         lines.append(f"やり直し: 「{ops.STAGE_LABEL[r['from']]}」から「{ops.RESTART_MODES[r['from']][r['mode']][0]}」"
                      f"（ラウンド {r['previous_round']} から）" + (f"  指示: {r['note']}" if r["note"] else ""))
+    if dg := snap.get("digest"):
+        lines += digest_lines(DigestState.model_validate(dg))
     if iv := snap.get("interview"):
         lines.append("\n[インタビュー]")
         for q in iv:
@@ -152,6 +157,8 @@ def text(snap: dict) -> str:
             flags = (" ※古い" if i["stale"] else "") + (" ※メモ変更" if i["note_changed"] else "") \
                 + ("" if i["placed"] else " ※位置不明")
             lines.append(f"{i['id']} [{tag}] {dec}{flags}「{i['text']}」{extra}" + (f" メモ: {i['note']}" if i["note"] else ""))
+        for f in r["figures"]:
+            lines.append(f"図の目印（情報。後で図にする）: {f['text']}（近く: {f['near']}）")
     if (h := snap.get("last_handoff")) and snap["stage"] == "done":
         lines.append(f"\n確定した記事: {h.get('final')}")
     return "\n".join(lines) + "\n"

@@ -13,6 +13,7 @@ PARA_MAX = 200
 GROUP_CHARS = 120
 CODE_SHOWN = 1500
 CODE_CHUNK_LINES = 40
+PATH_SEP = " › "
 PROSE_SUFFIXES = {".md", ".markdown", ".txt", ".text", ""}
 KINDS = ("prose", "quote", "item", "row", "code")
 
@@ -24,6 +25,7 @@ class InfoUnit(BaseModel):
     start: int
     end: int
     section: str = ""
+    path: str = ""
 
     @property
     def chars(self) -> int:
@@ -51,48 +53,48 @@ def info_units(markdown: str) -> list[InfoUnit]:
     src = doc.source
     units: list[InfoUnit] = []
 
-    def add(kind: str, text: str, span: tuple[int, int], section: str) -> None:
+    def add(kind: str, text: str, span: tuple[int, int], heads: tuple[str, ...]) -> None:
         if text.strip():
             units.append(InfoUnit(id=len(units) + 1, kind=kind, text=text.strip(), start=span[0], end=span[1],
-                                  section=section))
+                                  section=heads[-1] if heads else "", path=PATH_SEP.join(heads)))
 
-    def prose(p: Part, kind: str, section: str) -> None:
+    def prose(p: Part, kind: str, heads: tuple[str, ...]) -> None:
         a, b = p.span or (0, 0)
         body = src[a:b].strip()
         if len(norm(body)) <= PARA_MAX:
-            add(kind, p.text or body, (a, b), section)
+            add(kind, p.text or body, (a, b), heads)
             return
         for s, e in _sentence_groups(src, a, b):
-            add(kind, src[s:e], (s, e), section)
+            add(kind, src[s:e], (s, e), heads)
 
-    def walk(p: Part, section: str, kind: str = "prose") -> None:
+    def walk(p: Part, heads: tuple[str, ...], kind: str = "prose") -> None:
         for c in p.children:
             match c.kind:
                 case "section":
-                    walk(c, c.text)
+                    walk(c, (*heads, c.text.strip()))
                 case "paragraph" | "raw":
-                    prose(c, kind, section)
+                    prose(c, kind, heads)
                 case "quote":
-                    walk(c, section, "quote")
+                    walk(c, heads, "quote")
                 case "list":
                     for item in c.children:
                         paras = [x for x in item.children if x.kind == "paragraph"]
                         if paras:
                             add("item", "\n".join(x.text for x in paras),
-                                ((paras[0].span or (0, 0))[0], (paras[-1].span or (0, 0))[1]), section)
+                                ((paras[0].span or (0, 0))[0], (paras[-1].span or (0, 0))[1]), heads)
                         rest = [x for x in item.children if x.kind != "paragraph"]
                         if rest:
-                            walk(Part(kind="doc", children=rest), section, kind)
+                            walk(Part(kind="doc", children=rest), heads, kind)
                 case "table":
                     rows = [r for r in c.children if r.kind == "row"]
                     head = rows[0].cells if rows else []
                     for r in rows[1:]:
                         cells = [f"{h}: {v}" if h else v for h, v in zip(head + [""] * len(r.cells), r.cells)]
-                        add("row", " / ".join(cells), r.span or (0, 0), section)
+                        add("row", " / ".join(cells), r.span or (0, 0), heads)
                 case "code":
-                    add("code", c.text, c.span or (0, 0), section)
+                    add("code", c.text, c.span or (0, 0), heads)
 
-    walk(doc.root, "")
+    walk(doc.root, ())
     return units
 
 
@@ -101,7 +103,7 @@ def _unit_line(u: InfoUnit) -> str:
     text = u.text if u.kind != "code" or len(u.text) <= CODE_SHOWN else u.text[:CODE_SHOWN] + "\n…（以下略）"
     if u.kind == "code":
         text = "```\n" + text.rstrip("\n") + "\n```"
-    where = f"、節: {u.section}" if u.section else ""
+    where = f"、節: {u.path or u.section}" if u.path or u.section else ""
     return f"[{u.id}]（{kind}{where}）\n{text}"
 
 
@@ -126,6 +128,6 @@ def as_info_units(units: list[Unit]) -> tuple[list[InfoUnit], dict[int, str]]:
     infos, ids = [], {}
     for i, u in enumerate(units, 1):
         infos.append(InfoUnit(id=i, kind=u.kind if u.kind in KINDS else "prose",
-                              text=u.text, start=0, end=0, section=u.section))
+                              text=u.text, start=0, end=0, section=u.section, path=u.path))
         ids[i] = u.id
     return infos, ids

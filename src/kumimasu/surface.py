@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -15,7 +16,14 @@ if TYPE_CHECKING:
     from .llm import Provider
 
 GLUE = "glue"
+CAVEAT = "caveat"
+CAVEAT_RULE = re.compile(r"標本が(少な|小さ)|探索的|未確認|未検証|検証していな|確かめていな|一般化(でき|は難し|には注意)|"
+                         r"(単一|一人|1 人)の(読み手|著者|評価者)|あくまで[^。]{0,20}(結果|傾向)|可能性があります|可能性は否定でき|"
+                         r"注意が必要です|留意してください|限界があります")
 SURFACE_CATEGORIES: dict[str, str] = CATEGORIES | {
+    CAVEAT: "保守的な但し書き。限界・未確認・注意の断りのうち、それを消しても読者の結果の読み方が変わらないもの"
+            "（「標本が少ないので探索的な所見です」「単一の読み手による評価です」「未検証の可能性もあります」）。"
+            "結果の読み方を変える但し書き（適用範囲・前提・比較の条件を限るもの。例:「この差は opus のときだけで、sonnet では出なかった」）は選ばない",
     GLUE: "つなぎの効用文。直前・直後の話題を、読者にとっての役立ち・利点・結果に結びつけることだけが役目で、"
           "新しい事実・条件・手順・数値・理由を運ばない文（「これにより、手作業の入力が不要になります。」"
           "「この構成にしておくと、あとで差し替えるときに安心です。」「つまり、Binary Eye がスキャナーの役を果たすということです。」）",
@@ -64,6 +72,8 @@ def surface_prompt(units: list[Sentence], hints: dict[str, str], run: int) -> st
         "情報を運ばない文と見出しを選び、型を付けてください。目安は「消しても（見出しなら名詞句に直しても）読み手が失う情報が無い」ことです。"
         "事実・条件・手順・具体例・理由・数値・著者の体験や感想を述べている文は、言い回しが下の型に似ていても選ばないでください。"
         "文の一部だけが型にあたり、残りが情報を運んでいる場合も選ばないでください。"
+        "保守的な但し書き（caveat）は、条件を述べていても選んで構いません。ただし、その文を消すと読者が結果を読み違える"
+        "（効く範囲・前提・比べた条件が変わる）なら選ばないでください。迷ったら選びません。"
         "「（直後に箇条書き）」などの付いた文が、すぐ後の箇条書き・表・コードを導入しているだけなら選ばないでください。\n\n"
         f"型:\n{cats}\n\n"
         "該当するものだけを {\"items\": [{\"id\": \"M12\", \"category\": \"glue\"}]} の形の JSON で答えてください。"
@@ -95,6 +105,8 @@ def rule_hints(units: list[Sentence]) -> dict[str, str]:
     for u in units:
         if u.kind == "sentence" and u.id not in hints and GLUE_RULE.search(u.text):
             hints[u.id] = GLUE
+        elif u.kind == "sentence" and u.id not in hints and CAVEAT_RULE.search(u.text):
+            hints[u.id] = CAVEAT
     return hints
 
 

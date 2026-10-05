@@ -12,6 +12,7 @@ from .check import check_stem
 from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
 from .draft import read_used
 from .errors import StepError
+from .figures import figure_markers
 from .files import append_jsonl, atomic_write, read_jsonl
 from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, Unit
 from .research import research_name
@@ -218,8 +219,11 @@ def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Pro
                 provider = rewriter() if rewriter and ctx.needs_rewrite_call() else None
                 apply(wd, base, provider, source, ctx=ctx)
             final = final_name(base)
+            text = wd.read(final)
             extra = {"final": str((wd.root / final).resolve()), "draft": base,
-                     "article": article_info(wd, wd.read(final)), "used": read_used(wd, base)}
+                     "article": article_info(wd, text), "used": read_used(wd, base),
+                     "figures": [{"text": f["text"], "near": f["near"], "heading": f["heading"]}
+                                 for f in figure_markers(text)]}
         autos = [h for h in history(wd) if h["source"] == "auto" and h["stage"] == cur and h["round"] == p.round]
         handoff = {"event": "handoff", "stage": cur, "next": NEXT[cur], "round": p.round, "at": now(), "who": WHO[source],
                    "source": source, "note": note, "auto": autos} | extra

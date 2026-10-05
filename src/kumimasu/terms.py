@@ -193,7 +193,7 @@ def _tie(u: Unit, focus: set[str]) -> float:
 
 
 def _drop_rank(u: Unit, defines: set[str], focus: set[str]) -> tuple[int, float, int]:
-    score = {"yes": 0, "partial": 1, "no": 2}.get(u.searchable or "", 3) if u.origin == "material" else 3
+    score = {"yes": 0, "partial": 1, "no": 2}.get(u.searchable or "", 3) if u.is_material else 3
     return score + (2 if u.id in defines else 0), _tie(u, focus), -len(u.text)
 
 

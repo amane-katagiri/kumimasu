@@ -16,6 +16,7 @@ from .check import check_stem
 from .design import sync_design
 from .draft import read_used
 from .errors import LLMError, StepError
+from .figures import figure_markers
 from .interview import SEARCHABLE_LABEL
 from .model import REGISTER_LABEL, USE_LABEL
 from .render import render
@@ -94,7 +95,8 @@ class WriteApp:
                                                for s in (False, True))
         return ({"html": render(ctx.src)[0]} if with_html else {}) | {
             "draft": ctx.draft, "items": [i.model_dump() for i in ctx.review.items], "dirty": ctx.needs_apply(),
-            "used": read_used(self.wd, ctx.draft), "checked": checked, "version": ops.version(self.wd)}
+            "used": read_used(self.wd, ctx.draft), "checked": checked, "version": ops.version(self.wd),
+            "figures": figure_markers(ctx.src)}
 
     def review(self, name: str) -> dict:
         return self._review(ReviewContext.load(self.wd, self.draft_name(name)))
@@ -133,10 +135,12 @@ class WriteApp:
     def state(self) -> dict:
         wd = self.wd
         units = wd.units()
+        wanted = {x for u in units for x in u.from_units}
         design = sync_design(wd.design(), units) if wd.design_file.exists() else None
         return {"project": wd.project().model_dump(), "version": ops.version(wd), "stage": ops.stage_info(wd),
                 "poll_seconds": self.poll_seconds, "labels": LABELS,
                 "units": [u.model_dump() | {"firsthand": u.firsthand} for u in units],
+                "originals": {u.id: u.model_dump() for u in wd.raw_units() if u.id in wanted} if wanted else {},
                 "interview": wd.interview().model_dump() if wd.interview_file.exists() else None,
                 "design": design.model_dump() if design else None,
                 "conflicts": [c.model_dump() for c in design.live_conflicts()] if design else [],

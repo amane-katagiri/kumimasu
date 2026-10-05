@@ -61,6 +61,11 @@ def instructions(rep: CheckReport, target_length: int) -> list[str]:
                            "説明には材料（下の「材料」があればそれ）にあることだけを使い、材料に無い事実・数値・定義は作りません。"
                            "材料から説明できないものは、その言葉や数字を使わない書き方に直してください。"
                            "説明を足した分、ほかの所を縮めて、全体の長さを保ってください。\n" + _list([reader_line(i) for i in c.items]))
+            case "form":
+                out.append("次の箇所は、形を変えると読みやすくなります。密度の指摘は、その段落を直し方にある形（表・番号付きリストなど）に"
+                           "組み替えてください。図の指摘は、その場所に `<!-- 図: 何を示す図か -->` の目印を 1 行で置いてください"
+                           "（図そのものは描きません）。どちらも事実・数値は変えず、新しい事実を足しません。\n"
+                           + _list([form_line(i) for i in c.items]))
             case "length":
                 out.append(f"長さが目標から外れています（{c.detail}）。全体を {target_length} 字くらいにしてください。")
     return out
@@ -69,6 +74,10 @@ def instructions(rep: CheckReport, target_length: int) -> list[str]:
 def reader_line(i: dict) -> str:
     line = f"「{i['quote']}」（{READER_KIND_LABEL[i['kind']]}）: {i['why']} → {i['fix']}"
     return line + (f"\n    材料 {i['unit']}: {i['unit_text']}" if i.get("unit") else "")
+
+
+def form_line(i: dict) -> str:
+    return f"「{i['quote']}」（{READER_KIND_LABEL[i['kind']]}）: {i['why']} → {i['fix']}"
 
 
 def revise_prompt(block: str, draft: str, todo: list[str], research: Research | None = None) -> str:
