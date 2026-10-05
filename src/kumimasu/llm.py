@@ -7,13 +7,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
-
-class LLMError(RuntimeError):
-    pass
+from .errors import LLMError
+from .files import atomic_write, private_dir
 
 
 class Provider(Protocol):
@@ -101,9 +101,9 @@ class ClaudeCliProvider:
 
     def command(self, system: str | None = None) -> list[str]:
         tools = ",".join(self.allowed_tools)
-        # An empty --setting-sources keeps the user's CLAUDE.md (persona, memory) out of judge prompts.
         cmd = [self.executable, "-p", "--output-format", "json", "--model", self.model, "--tools", tools,
-               "--setting-sources", "", "--no-session-persistence"]
+               "--setting-sources", "", "--safe-mode", "--strict-mcp-config", "--disable-slash-commands",
+               "--no-session-persistence"]
         if tools:
             cmd += ["--allowedTools", tools]
         if system:
@@ -111,16 +111,31 @@ class ClaudeCliProvider:
         return cmd
 
     def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
-        if not shutil.which(self.executable):
-            raise LLMError(f"{self.executable} not found on PATH")
-        proc = subprocess.run(self.command(system), input=prompt + _schema_hint(json_schema), capture_output=True, text=True,
-                              timeout=self.timeout)
-        if proc.returncode != 0:
-            raise LLMError(f"claude -p failed ({proc.returncode}): {proc.stderr[:500]}")
-        data = json.loads(proc.stdout)
-        if data.get("is_error"):
-            raise LLMError(f"claude -p error: {data.get('result')}")
+        with tempfile.TemporaryDirectory(prefix="kumimasu-") as tmp:
+            out = _run_cli(self.command(system), prompt + _schema_hint(json_schema), self.timeout, tmp)
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError as e:
+            raise LLMError(f"claude -p の出力が JSON ではありません: {out[:200]!r}") from e
+        if not isinstance(data, dict) or data.get("is_error"):
+            raise LLMError(f"claude -p がエラーを返しました: {data.get('result') if isinstance(data, dict) else data}")
         return str(data.get("result", ""))
+
+
+def _run_cli(cmd: list[str], stdin: str, timeout: float, cwd: str) -> str:
+    if not shutil.which(cmd[0]):
+        raise LLMError(f"{cmd[0]} が PATH にありません")
+    try:
+        proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout, cwd=cwd, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise LLMError(f"{cmd[0]} が {timeout:.0f} 秒で終わりませんでした") from e
+    if proc.returncode != 0:
+        raise LLMError(f"{cmd[0]} が失敗しました（{proc.returncode}）: {proc.stderr[-500:]}")
+    return proc.stdout
+
+
+CODEX_DISABLED_FEATURES = ("shell_tool", "unified_exec", "browser_use", "browser_use_external", "computer_use",
+                           "in_app_browser", "apps", "plugins", "hooks", "image_generation", "multi_agent")
 
 
 class CodexCliProvider:
@@ -132,25 +147,28 @@ class CodexCliProvider:
         self.timeout = timeout
         self.executable = executable
 
+    def command(self, tmp: str, schema_path: str | None) -> list[str]:
+        cmd = [self.executable, "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+               "--sandbox", "read-only", "-C", tmp, "-c", 'web_search="disabled"',
+               "--output-last-message", str(Path(tmp) / "last.txt")]
+        for feature in CODEX_DISABLED_FEATURES:
+            cmd += ["--disable", feature]
+        if self._model_arg:
+            cmd += ["--model", self._model_arg]
+        if schema_path:
+            cmd += ["--output-schema", schema_path]
+        return [*cmd, "-"]
+
     def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
-        if not shutil.which(self.executable):
-            raise LLMError(f"{self.executable} not found on PATH")
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "last.txt"
-            cmd = [self.executable, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-C", tmp,
-                   "--output-last-message", str(out)]
-            if self._model_arg:
-                cmd += ["--model", self._model_arg]
+        with tempfile.TemporaryDirectory(prefix="kumimasu-") as tmp:
+            schema_path = None
             if json_schema:
-                schema_path = Path(tmp) / "schema.json"
-                schema_path.write_text(json.dumps(json_schema))
-                cmd += ["--output-schema", str(schema_path)]
-            cmd.append("-")
-            full = (f"{system}\n\n" if system else "") + prompt + _schema_hint(json_schema)
-            proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=self.timeout)
-            if proc.returncode != 0:
-                raise LLMError(f"codex exec failed ({proc.returncode}): {proc.stderr[-500:]}")
-            return out.read_text(encoding="utf-8") if out.exists() else proc.stdout
+                schema_path = str(Path(tmp) / "schema.json")
+                Path(schema_path).write_text(json.dumps(json_schema), encoding="utf-8")
+            stdout = _run_cli(self.command(tmp, schema_path), (f"{system}\n\n" if system else "") + prompt,
+                              self.timeout, tmp)
+            out = Path(tmp) / "last.txt"
+            return out.read_text(encoding="utf-8") if out.exists() else stdout
 
 
 class AnthropicProvider:
@@ -196,32 +214,38 @@ class CachedProvider:
         self.dir = Path(cache_dir)
         self.hits = 0
         self.misses = 0
+        self._lock = threading.Lock()
 
     def _key(self, prompt: str, system: str | None, json_schema: dict | None) -> str:
-        parts: list[Any] = [self.inner.name, self.inner.model, system, json_schema, prompt]
-        # Appended only when set, so entries cached for tool-less calls keep their keys.
-        if tools := getattr(self.inner, "allowed_tools", ()):
-            parts.append(list(tools))
-        blob = json.dumps(parts, ensure_ascii=False, sort_keys=True)
-        return hashlib.sha256(blob.encode()).hexdigest()
+        parts = [self.inner.name, self.inner.model, list(getattr(self.inner, "allowed_tools", ())), system, json_schema,
+                 prompt]
+        return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
     def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
         path = self.dir / self.inner.name / (self._key(prompt, system, json_schema) + ".json")
-        if path.exists():
-            self.hits += 1
+        if path.is_file() and not path.is_symlink():
+            with self._lock:
+                self.hits += 1
             return json.loads(path.read_text(encoding="utf-8"))["response"]
-        self.misses += 1
+        with self._lock:
+            self.misses += 1
         out = self.inner.complete(prompt, system=system, json_schema=json_schema)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"model": self.inner.model, "prompt": prompt, "system": system, "response": out},
-                                   ensure_ascii=False), encoding="utf-8")
+        private_dir(self.dir)
+        private_dir(path.parent)
+        atomic_write(path, json.dumps({"model": self.inner.model, "prompt": prompt, "system": system, "response": out},
+                                      ensure_ascii=False))
         return out
+
+
+MODEL_SPEC = re.compile(r"^[\w.:\[\]-]+$")
 
 
 def get_provider(spec: str, cache_dir: str | None = None, allowed_tools: tuple[str, ...] = ()) -> Provider:
     kind, _, model = spec.partition(":")
+    if model and not MODEL_SPEC.match(model):
+        raise ValueError(f"モデルの名前に使えない文字があります: {model!r}")
     if allowed_tools and kind != "claude-cli":
-        raise ValueError(f"allowed_tools is supported only by claude-cli, not {kind}")
+        raise ValueError(f"ツールを使えるのは claude-cli だけです（{kind} では使えません）")
     p: Provider
     match kind:
         case "fake":
@@ -235,5 +259,5 @@ def get_provider(spec: str, cache_dir: str | None = None, allowed_tools: tuple[s
         case "openai":
             p = OpenAIProvider(model or "gpt-5-mini")
         case _:
-            raise ValueError(f"unknown provider: {spec}")
+            raise ValueError(f"知らない provider です: {spec}")
     return CachedProvider(p, cache_dir) if cache_dir else p

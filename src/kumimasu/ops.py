@@ -12,9 +12,11 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from .design import apply_noise, sync_design
+from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
 from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, UnitUse
-from .workdir import StepError, WorkDir, atomic_write, now
+from .errors import StepError
+from .files import append_jsonl, atomic_write, read_jsonl
+from .workdir import WorkDir, now
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -47,16 +49,11 @@ def require_stage(wd: WorkDir, *stages: str, action: str) -> None:
 
 def record(wd: WorkDir, source: str, op: str, **detail) -> None:
     p = wd.project()
-    row = {"at": now(), "source": source, "stage": p.stage, "round": p.round, "op": op} | detail
-    with (wd.root / HISTORY).open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    append_jsonl(wd.root / HISTORY, {"at": now(), "source": source, "stage": p.stage, "round": p.round, "op": op} | detail)
 
 
 def history(wd: WorkDir) -> list[dict]:
-    path = wd.root / HISTORY
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return read_jsonl(wd.root / HISTORY)
 
 
 def set_stage(wd: WorkDir, new: str, round_: int | None = None) -> None:
@@ -95,11 +92,14 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
         require_stage(wd, "design", action="設計の変更")
         d = sync_design(wd.design(), wd.units())
         upd: dict = {}
-        if "purpose" in body:
-            upd["purpose"] = str(body["purpose"])
-        for key in ("takeaways", "order", "avoid"):
+        for key in ("purpose", "form_prefs"):
+            if key in body:
+                upd[key] = str(body[key])
+        for key in ("takeaways", "order", "avoid", "research", "forms"):
             if key in body:
                 upd[key] = [str(x).strip() for x in body[key] if str(x).strip()]
+        if len(upd.get("research", [])) > RESEARCH_MAX or any(len(x) > RESEARCH_CHARS for x in upd.get("research", [])):
+            raise ValueError(f"調べることは {RESEARCH_MAX} 個まで、それぞれ {RESEARCH_CHARS} 字までです")
         if "rules" in body:
             upd["rules"] = [Rule.model_validate(x) for x in body["rules"]]
         if "skip" in body:
@@ -192,12 +192,13 @@ def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Pro
         if cur == "design" and not wd.design_file.exists():
             raise StageError("まだ設計がありません（kumimasu design）")
         base = draft or wd.review_draft()
-        if cur in ("drafting", "review") and not (wd.root / base).is_file():
-            raise StageError(f"{base} がありません（kumimasu draft）")
-        if cur == "drafting":
+        if cur in ("drafting", "review"):
             from .review import require_base
 
             require_base(base)
+            if not wd.is_plain_file(base):
+                raise StageError(f"{base} がありません（kumimasu draft）")
+        if cur == "drafting":
             wd.save_project(wd.project().model_copy(update={"review_draft": base}))
         extra: dict = {}
         if cur == "review":
@@ -215,16 +216,12 @@ def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Pro
         record(wd, source, "confirm", note=note)
         set_stage(wd, NEXT[cur])
         atomic_write(wd.root / HANDOFF, json.dumps(handoff, ensure_ascii=False, indent=1) + "\n")
-        with (wd.root / HANDOFFS).open("a", encoding="utf-8") as f:
-            f.write(json.dumps(handoff, ensure_ascii=False) + "\n")
+        append_jsonl(wd.root / HANDOFFS, handoff)
         return handoff
 
 
 def handoffs(wd: WorkDir) -> list[dict]:
-    path = wd.root / HANDOFFS
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return read_jsonl(wd.root / HANDOFFS)
 
 
 def find_handoff(wd: WorkDir, for_stage: str) -> dict | None:

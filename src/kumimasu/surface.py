@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from .glue import GLUE_RULE, material_grams, traceable
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .metadiscourse import CATEGORIES, LEADS, Unit, rule_hits, split_units
 
@@ -61,7 +62,7 @@ def surface_prompt(units: list[Unit], hints: dict[str, str], run: int, runs: int
         lines.append(f"[{u.id}] {'見出し: ' if u.kind == 'heading' else ''}{u.text}{lead}{tag}")
     cats = "\n".join(f"- {k}: {v}" for k, v in SURFACE_CATEGORIES.items())
     return (
-        "次は技術ブログ記事（またはその一部）を文に分けたものです。[M12] は文の番号、[H3] は見出しの番号です。"
+        DATA_NOTE_JA + "\n\n次は技術ブログ記事（またはその一部）を文に分けたものです。[M12] は文の番号、[H3] は見出しの番号です。"
         "コード・表・引用は省いてあります。「← 規則:」は機械的な手がかり語が当たったことを示します。"
         "当たっていても該当しないことは多く、当たっていない文が該当することもあります。\n\n"
         "情報を運ばない文と見出しを選び、型を付けてください。目安は「消しても（見出しなら名詞句に直しても）読み手が失う情報が無い」ことです。"

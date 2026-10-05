@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .generate import Brief, research_generation_prompt, split_planned
+from .generate import DATA_NOTE_JA, Brief, research_generation_prompt, split_planned
 from .llm import extract_json
 from .payload import coverage_prompt, coverage_schema, parse_coverage, thin_brief
 from .interview import unit_lines
@@ -36,7 +36,9 @@ def judge_searchable(units: list[Unit], baseline: str, judge: Provider) -> tuple
     return out, {"raw": raw, "ids": ids}
 
 
-CLUSTER_PROMPT_JA = """次は、ある記事のための材料を番号付きの単位に分けたものです。同じ情報を述べている単位の組を見つけてください。
+CLUSTER_PROMPT_JA = DATA_NOTE_JA + """
+
+次は、ある記事のための材料を番号付きの単位に分けたものです。同じ情報を述べている単位の組を見つけてください。
 
 同じ情報とは、言い回しが違っても、どちらか一方を消しても読み手に伝わる情報が減らないものです。話題が同じでも、片方にしか無い事実・数値・手順・理由があるなら別の情報です。コードと、そのコードを説明する文も別の情報です。
 

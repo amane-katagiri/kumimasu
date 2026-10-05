@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
-from .generate import Brief, generation_prompt
+from .generate import DATA_NOTE_JA, Brief, generation_prompt
 from .llm import extract_json
 from .parts.markdown import parse
 from .parts.model import Part
@@ -124,7 +124,9 @@ def units_block(units: list[InfoUnit]) -> str:
     return "\n\n".join(_unit_line(u) for u in units)
 
 
-COVERAGE_PROMPT_JA = """次の「対象の記事」を情報の単位に分け、番号を付けました。単位ごとに、その情報が「比べる文書」のどれかに書かれているかを判定してください。
+COVERAGE_PROMPT_JA = DATA_NOTE_JA + """
+
+次の「対象の記事」を情報の単位に分け、番号を付けました。単位ごとに、その情報が「比べる文書」のどれかに書かれているかを判定してください。
 
 判定（v）:
 - yes: 単位の中心になる情報が、比べる文書のどれかに書かれている。言い回し・順番・言語が違ってもよい。

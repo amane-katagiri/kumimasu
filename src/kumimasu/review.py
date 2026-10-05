@@ -11,12 +11,15 @@ from typing import TYPE_CHECKING, Literal
 import yaml
 from pydantic import BaseModel
 
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .parts.markdown import parse as parse_parts
 from .payload import info_units
 from .surface import SURFACE_CATEGORIES
 from .check import KEEP_FILE, CheckReport, check_stem, dash_hits, load_keep, text_hash
-from .workdir import WorkDir, atomic_write, dump_yaml, now
+from .files import atomic_write
+from .files import create_new
+from .workdir import WorkDir, check_draft_name, dump_yaml, now
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -318,7 +321,9 @@ def delete_spans(src: str, spans: list[tuple[int, int]]) -> str:
     return apply_edits(src, [(a, b, "") for a, b in spans])
 
 
-REWRITE_PROMPT_JA = """次の各項目は、記事の下書きの中で著者が「書き直す」と決めた文です。各項目の文だけを書き直してください。前後の段落は文脈として付けたもので、直しません。
+REWRITE_PROMPT_JA = DATA_NOTE_JA + """
+
+次の各項目は、記事の下書きの中で著者が「書き直す」と決めた文です。各項目の文だけを書き直してください。前後の段落は文脈として付けたもので、直しません。
 
 - 著者のメモがあれば、それに従います。
 - 段落・見出し・表・コードの構成は変えません。文の数も、メモが求めない限り増やしません。
@@ -434,6 +439,7 @@ def base_drafts(wd: WorkDir) -> list[str]:
 
 
 def require_base(name: str) -> None:
+    check_draft_name(name)
     if is_final(name):
         raise ValueError(f"{name} は反映の出力です。元の下書き {base_of(name)} の決定を直して、そこから反映してください")
 
@@ -450,11 +456,14 @@ def export_final(wd: WorkDir, base: str, to_dir: Path, stamp: datetime | None = 
         raise ValueError(f"{src.name} がありません。先に反映してください")
     to_dir.mkdir(parents=True, exist_ok=True)
     stem = download_name(wd, base, stamp).removesuffix(".md")
+    data = wd.read(src.name).encode()
     dest, n = to_dir / f"{stem}.md", 2
-    while dest.exists():
-        dest, n = to_dir / f"{stem}-{n}.md", n + 1
-    dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    return dest
+    while True:
+        try:
+            create_new(dest, data, 0o644)
+            return dest
+        except FileExistsError:
+            dest, n = to_dir / f"{stem}-{n}.md", n + 1
 
 
 def needs_rewrite_call(wd: WorkDir, draft: str, regenerate: tuple[str, ...] = ()) -> bool:

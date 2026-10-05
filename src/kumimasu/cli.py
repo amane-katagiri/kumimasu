@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from .workdir import StepError, WorkDir
+from .errors import StepError
+from .workdir import WorkDir
 
 app = typer.Typer(no_args_is_help=True, help="Write an article from the author's unselected material: "
                   "init -> mark -> interview -> design -> draft -> check -> final check.")
 
 DirArg = Annotated[Path, typer.Argument(file_okay=False, help="Work directory")]
-WriterOpt = Annotated[str | None, typer.Option("--writer", help="Provider for the one-shot writing call, web tools allowed "
+WriterOpt = Annotated[str | None, typer.Option("--writer", help="Provider for the one-shot writing call, no tools "
                                                "(default: config providers.writer)")]
+ResearcherOpt = Annotated[str | None, typer.Option("--researcher", help="Provider for the web research before writing "
+                                                   "(default: config providers.researcher)")]
 JudgeOpt = Annotated[str | None, typer.Option("--judge", help="Provider for coverage and mapping judgements "
                                               "(default: config providers.judge)")]
 MetaOpt = Annotated[str | None, typer.Option("--meta-detector", help="Provider for meta-discourse/glue detection, or "
@@ -20,6 +24,19 @@ MetaOpt = Annotated[str | None, typer.Option("--meta-detector", help="Provider f
 ProviderOpt = Annotated[str | None, typer.Option("--provider", help="Provider (default: from the config)")]
 VerifyOpt = Annotated[bool, typer.Option("--verify-links", help="Open links that are not in the material (network)")]
 WEB_TOOLS = ("WebSearch", "WebFetch")
+STATE = {"trust_project": False}
+
+
+@app.callback()
+def options(trust_project: Annotated[bool, typer.Option(
+        "--trust-project", envvar="KUMIMASU_TRUST_PROJECT",
+        help="Use providers, cache_dir, workdir_root and outside rules files from ./kumimasu.yaml and the work "
+             "directory's project.yaml")] = False) -> None:
+    STATE["trust_project"] = trust_project
+
+
+def _notice(text: str) -> None:
+    typer.echo(text, err=True)
 
 
 def _wd(path: Path) -> WorkDir:
@@ -39,9 +56,12 @@ def _cfg(path: Path | None = None, **cli):
     from .config import ConfigError, load
 
     try:
-        return load(path, Path.cwd(), cli)
+        cfg = load(path, Path.cwd(), cli, trust=STATE["trust_project"])
     except ConfigError as e:
         _fail(e)
+    for w in cfg.warnings():
+        _notice(f"注意: {w}")
+    return cfg
 
 
 def _llm(cfg, role: str, override: str | None = None, web: bool = False):
@@ -80,12 +100,16 @@ def init(path: DirArg,
          kind: Annotated[str, typer.Option("--kind", help="実用 | 読み物 | 調査")] = "実用",
          length: Annotated[int, typer.Option("--length", min=300)] = 4000) -> None:
     """Copy the material into DIR and split it into material units (units.yaml)."""
+    from .files import private_dir
     from .model import KINDS, Project
     from .workdir import init_workdir
 
     if kind not in KINDS:
         raise typer.BadParameter(f"--kind must be one of {' | '.join(KINDS)}")
     try:
+        root = Path(_cfg().workdir_root)
+        if path.resolve().is_relative_to(root.resolve()):
+            private_dir(root)
         _, units = init_workdir(path, Project(topic=topic, audience=audience, kind=kind, length=length), material)
     except StepError as e:
         _fail(e)
@@ -102,6 +126,8 @@ def mark(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
     _guard(wd, "interview", action="目印付け")
     try:
         cfg = _cfg(path)
+        if new_baseline or not (wd.root / "baseline" / "W.md").exists():
+            _notice("ウェブ調査: providers.baseline が WebSearch・WebFetch を使います（送るのは題と読者だけ）")
         units = run(wd, _llm(cfg, "baseline", writer, web=True), _llm(cfg, "judge", judge), reuse_baseline=not new_baseline)
     except StepError as e:
         _fail(e)
@@ -237,12 +263,44 @@ def review(path: DirArg, provider: ProviderOpt = None,
 
 
 @app.command()
-def draft(path: DirArg, writer: WriterOpt = None,
+def research(path: DirArg, researcher: ResearcherOpt = None) -> None:
+    """Web research for the design's research list -> DIR/research.json. Only the topic, audience, purpose, takeaways
+    and that list are sent; the material and the answers are not."""
+    from .research import research_name
+
+    wd = _wd(path)
+    _guard(wd, "drafting", action="ウェブ調査")
+    try:
+        res = _research(wd, _cfg(path), researcher, refresh=True)
+    except StepError as e:
+        _fail(e)
+    typer.echo(f"wrote {wd.root / research_name(wd)}: {len(res.findings)} findings")
+
+
+def _research(wd: WorkDir, cfg, researcher: str | None, refresh: bool):
+    from .design import sync_design
+    from .research import load_research, research as run
+
+    d = sync_design(wd.design(), wd.units())
+    old = load_research(wd)
+    if old is not None and old.topics == d.research and not refresh:
+        return old
+    if d.research:
+        _notice("ウェブ調査: providers.researcher が WebSearch・WebFetch を使います"
+                "（送るのは題・読者・ねらい・持ち帰り・調べることだけで、材料と回答は送りません）")
+    return run(wd, _llm(cfg, "researcher", researcher, web=True), d)
+
+
+@app.command()
+def draft(path: DirArg, writer: WriterOpt = None, researcher: ResearcherOpt = None,
+          new_research: Annotated[bool, typer.Option("--new-research", help="Run the web research again")] = False,
           out: Annotated[str | None, typer.Option("--out", help="File name inside DIR (default: draft.md, draft.rN.md "
                                                   "in round N)")] = None,
           drop_list: Annotated[str | None, typer.Option("--drop-list", help="topics | full | none (default: design.yaml)")] = None) -> None:
-    """One writing call with the design and the kept material -> DIR/draft.md."""
+    """Web research for the design's research list (only when it changed), then one writing call without tools
+    with the design, the kept material and the research findings -> DIR/draft.md."""
     from .draft import draft as run
+    from .workdir import check_draft_name
 
     if drop_list not in (None, "topics", "full", "none"):
         raise typer.BadParameter("--drop-list must be topics, full or none")
@@ -250,8 +308,11 @@ def draft(path: DirArg, writer: WriterOpt = None,
     _guard(wd, "drafting", action="下書き")
     out = out or wd.draft_base()
     try:
-        text = run(wd, _llm(_cfg(path), "writer", writer, web=True), out, drop_list)
-    except StepError as e:
+        check_draft_name(out)
+        cfg = _cfg(path)
+        found = _research(wd, cfg, researcher, new_research)
+        text = run(wd, _llm(cfg, "writer", writer), out, drop_list, found)
+    except (StepError, ValueError) as e:
         _fail(e)
     typer.echo(f"wrote {wd.root / out} ({len(text)} chars)")
 
@@ -261,6 +322,7 @@ def _fetch(verify: bool):
         return None
     from .check import default_fetch
 
+    _notice("リンクの確認: 材料に無いリンクを開きます（ネットワークを使います。非公開のアドレスには繋ぎません）")
     return default_fetch
 
 
@@ -274,15 +336,17 @@ def check(path: DirArg, judge: JudgeOpt = None, meta_detector: MetaOpt = None,
                                                            "(default: config surface.runs)")] = None) -> None:
     """Check the draft against the design (the design's metamorphic relations) -> DIR/check.json and check.txt."""
     from .check import check as run, report_text
+    from .workdir import check_draft_name
 
     wd = _wd(path)
     _guard(wd, "drafting", action="検査")
     draft_name = draft_name or wd.draft_base()
     try:
+        check_draft_name(draft_name)
         cfg = _cfg(path)
         rep = run(wd, _llm(cfg, "judge", judge), _detector(cfg, meta_detector), draft_name, _fetch(verify_links),
                   surface_only, cfg.get("surface.runs", surface_runs), cfg.get("surface.min_votes"))
-    except StepError as e:
+    except (StepError, ValueError) as e:
         _fail(e)
     typer.echo(report_text(rep), nl=False)
 
@@ -300,7 +364,7 @@ def revise(path: DirArg, writer: WriterOpt = None, judge: JudgeOpt = None,
     dst = src.removesuffix(".md") + ".v2.md"
     try:
         cfg = _cfg(path)
-        rep, todo = run(wd, _llm(cfg, "writer", writer, web=True), _llm(cfg, "judge", judge),
+        rep, todo = run(wd, _llm(cfg, "writer", writer), _llm(cfg, "judge", judge),
                         _detector(cfg, meta_detector), _fetch(verify_links), src, dst)
     except StepError as e:
         _fail(e)
@@ -324,6 +388,7 @@ def polish(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft
     """Surface pass: majority-vote detection of meta-discourse, glue and dashes; with --yes, rewrite only those sentences
     and re-detect around the edits until nothing stable is left."""
     from .polish import POLISH_RULES, polish as run
+    from .workdir import check_draft_name
 
     chosen = tuple(r.strip() for r in rules.split(",") if r.strip())
     if not chosen or any(r not in POLISH_RULES for r in chosen):
@@ -338,8 +403,10 @@ def polish(path: DirArg, draft_name: Annotated[str | None, typer.Option("--draft
     _guard(wd, "drafting", action="表面の仕上げ")
     draft_name = draft_name or wd.draft_base()
     try:
+        check_draft_name(draft_name)
+        out = check_draft_name(out or draft_name.removesuffix(".md") + ".polished.md")
         res = run(wd, _llm(cfg, "detector", provider), draft_name, chosen, yes, runs, min_votes, max_rounds, out)
-    except StepError as e:
+    except (StepError, ValueError) as e:
         _fail(e)
     for rd in res.rounds:
         typer.echo(f"round {rd.round}: scope {rd.scope_chars} chars, {rd.runs} runs, {rd.hits} hits, {rd.edits} edits, "
@@ -372,4 +439,5 @@ from . import cli_flow  # noqa: E402,F401  (registers the checkpoint commands on
 
 
 def main() -> None:
+    os.umask(0o077)
     app()

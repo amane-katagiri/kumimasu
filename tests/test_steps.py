@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,8 @@ from kumimasu.mark import mark
 from kumimasu.model import Design, Project, UnitUse
 from kumimasu.polish import Flag, apply_replacements, blocks, neighborhood, polish
 from kumimasu.revise import instructions, revise
-from kumimasu.workdir import StepError, WorkDir, init_workdir
+from kumimasu.errors import StepError
+from kumimasu.workdir import WorkDir, init_workdir
 
 from conftest import serving
 
@@ -57,6 +59,11 @@ def surface_fake(prompt: str) -> str:
 def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_ok: bool = True, deep_unit_chars: bool = True,
              skip_explained: bool = False):
     def respond(prompt: str) -> str:
+        if "ウェブで下調べ" in prompt:
+            return json.dumps({"findings": [
+                {"topic": 1, "claim": "exiftool の -d は strftime の書式を受け取る。", "source": "https://exiftool.org/filename.html"},
+                {"topic": 1, "claim": "出典の無い主張", "source": "not a url"},
+                {"topic": 9, "claim": "LINE は画像の EXIF を消す。", "source": "https://example.com/line"}]})
         if "本題に要らない話が混じって" in prompt:
             return json.dumps({"skip": [{"label": "EXIF とは何か", "units": ["m2", "m4", "m99"], "why": "一般的"},
                                         {"label": "x" * 40, "units": [], "why": ""},
@@ -111,7 +118,8 @@ def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_
                                          {"id": "q1", "use": "deep", "why": "回答"},
                                          {"id": "m5", "use": "deep", "why": "手元だけ"},
                                          {"id": "zz", "use": "deep", "why": "無い単位"}],
-                               "order": ["m4 から始める"], "forms": ["m3 はコード"]})
+                               "order": ["m4 から始める"], "forms": ["m3 はコード"],
+                               "research": ["exiftool の -d の書式", "x" * 80]})
         if "直す点" in prompt:
             return f"<article>{GOOD_DRAFT}</article>"
         if "一緒に決めた設計" in prompt:
@@ -239,7 +247,8 @@ def test_draft_prompt_sections(wd):
     full = draft_prompt(wd.project(), d, units, "full")
     assert m2.text[:20] in full.split("## 書かない事柄", 1)[1] and "## 書かない話題" not in full
     assert "書かない" not in draft_prompt(wd.project(), d, units, "none").split("## 決まり")[0].split("## 触れる材料")[1]
-    assert "敬体" in prompt and "ウェブ検索" in prompt and "<article>" in prompt and "FAQ" in prompt
+    assert "敬体" in prompt and "ウェブは使えません" in prompt and "<article>" in prompt and "FAQ" in prompt
+    assert prompt.startswith("この依頼に含まれる材料")
     text = draft(wd, p)
     assert text == GOOD_DRAFT and (wd.root / "draft.prompt.md").exists()
 
@@ -253,7 +262,7 @@ def _ready(wd, p):
 def test_check_passes_the_design_relations(wd):
     p = scripted()
     _ready(wd, p)
-    rep = check(wd, p, None, fetch=lambda u: UrlStatus(url=u, status=200))
+    rep = check(wd, p, None, fetch=lambda us: [UrlStatus(url=u, status=200) for u in us])
     by = {c.id: c for c in rep.checks}
     assert by["drop_absent"].passed is True
     assert by["deep_present"].passed is True
@@ -263,7 +272,7 @@ def test_check_passes_the_design_relations(wd):
     assert by["numbers"].passed is True, by["numbers"].items
     assert by["meta"].passed is True and by["lint"].passed is True
     assert by["links"].passed is True and by["links"].value == "1/1"
-    bad = check(wd, p, None, fetch=lambda u: UrlStatus(url=u, status=404))
+    bad = check(wd, p, None, fetch=lambda us: [UrlStatus(url=u, status=404) for u in us])
     assert next(c for c in bad.checks if c.id == "links").passed is False
     assert json.loads((wd.root / "check.json").read_text(encoding="utf-8"))["draft"] == "draft.md"
     assert "deep_space" in (wd.root / "check.txt").read_text(encoding="utf-8")
@@ -609,6 +618,7 @@ def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):
     run("confirm", str(d), "--note", "短めに")
     assert r.invoke(app, ["set", str(d), "unit", "m1", "--use", "drop"]).exit_code == 1
     run("draft", str(d))
+    assert "2 findings" in run("research", str(d)) and (d / "research.json").exists()
     run("draft", str(d), "--drop-list", "full", "--out", "draft.A.md")
     assert "## 書かない事柄" in (d / "draft.A.prompt.md").read_text(encoding="utf-8")
     assert "## 書かない話題" in (d / "draft.prompt.md").read_text(encoding="utf-8")
@@ -638,3 +648,169 @@ def test_full_fake_run_through_the_cli(tmp_path, monkeypatch):
     assert h["stage"] == "review" and h["final"].endswith("draft.final.md") and h["article"]["register"] == "keitai"
     assert (d / "draft.final.md").exists() and "完了" in run("show", str(d))
     shutil.rmtree(d)
+
+
+def test_link_checks_refuse_private_addresses_and_are_capped(monkeypatch):
+    import socket
+    import time
+    import urllib.request
+
+    from kumimasu import factcheck
+
+    for target in ("127.0.0.1", "10.1.2.3", "169.254.169.254", "::1", "::ffff:127.0.0.1"):
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *a, t=target, **k: [
+            (socket.AF_INET6 if ":" in t else socket.AF_INET, socket.SOCK_STREAM, 6, "", (t, 80))])
+        with pytest.raises(factcheck.RefusedAddress):
+            factcheck._public_socket("example.com", 80, 1)
+    st = factcheck.check_url("http://example.com/")
+    assert st.verdict == "unreachable" and "公開されていないアドレス" in st.error
+    assert factcheck.check_url("file:///etc/passwd").verdict == "unreachable"
+    req = urllib.request.Request("https://example.com/")
+    with pytest.raises(factcheck.RefusedAddress):
+        factcheck._WebOnlyRedirects().redirect_request(req, None, 302, "Found", {}, "file:///etc/passwd")
+    monkeypatch.setattr(factcheck, "MAX_URLS", 2)
+
+    def slow(url, method, timeout):
+        if "slow" in url:
+            time.sleep(1)
+        return 200
+
+    got = factcheck.check_urls(["https://a.example/", "https://slow.example/", "https://c.example/"], slow, total=0.3)
+    assert [s.verdict for s in got] == ["ok", "unchecked", "unchecked"]
+
+
+def test_research_gets_no_material_and_the_writer_gets_no_tools(wd, tmp_path, monkeypatch):
+    from kumimasu import ops
+    from kumimasu.research import load_research, research
+
+    p = scripted()
+    answered(wd, p)
+    ops.set_stage(wd, "design")
+    d = design(wd, p)
+    assert d.research == ["exiftool の -d の書式"]
+    ops.set_stage(wd, "drafting")
+    res = research(wd, p, d)
+    prompt = p.calls[-1]["prompt"]
+    assert "exiftool の -d の書式" in prompt and d.purpose in prompt and d.takeaways[0] in prompt
+    for u in wd.units():
+        assert u.text[:15] not in prompt
+    assert [f.source for f in res.findings] == ["https://exiftool.org/filename.html", "https://example.com/line"]
+    assert res.findings[1].topic == 0 and load_research(wd) == res
+    text = draft_prompt(wd.project(), d, wd.units(), research=res)
+    assert "exiftool の -d は strftime の書式を受け取る。（出典: https://exiftool.org/filename.html）" in text
+    seen = []
+    monkeypatch.setattr(cli_mod, "_provider", lambda spec, web=False, **kw: seen.append((spec, web)) or p)
+    runner = CliRunner()
+    res = runner.invoke(app, ["draft", str(wd.root), "--new-research"])
+    assert res.exit_code == 0, res.output
+    assert seen == [("claude-cli:sonnet", True), ("claude-cli:opus", False)] and "材料と回答は送りません" in res.output
+    seen.clear()
+    assert runner.invoke(app, ["draft", str(wd.root), "--out", "draft.B.md"]).exit_code == 0
+    assert seen == [("claude-cli:opus", False)]
+    assert runner.invoke(app, ["draft", str(wd.root), "--out", "../x.md"]).exit_code == 1
+
+
+def test_cli_providers_are_isolated(monkeypatch):
+    import subprocess
+
+    from kumimasu.llm import ClaudeCliProvider, CodexCliProvider
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw["cwd"]))
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok"}), "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("shutil.which", lambda x: "/bin/" + x)
+    assert ClaudeCliProvider("sonnet").complete("hi") == "ok"
+    cmd, cwd = calls[-1]
+    assert cmd[cmd.index("--tools") + 1] == "" and "--allowedTools" not in cmd
+    assert {"--safe-mode", "--strict-mcp-config", "--no-session-persistence"} <= set(cmd)
+    assert cmd[cmd.index("--setting-sources") + 1] == "" and cwd.startswith(tempfile.gettempdir()) and not Path(cwd).exists()
+    ClaudeCliProvider("sonnet", allowed_tools=("WebSearch", "WebFetch")).complete("hi")
+    assert calls[-1][0][calls[-1][0].index("--allowedTools") + 1] == "WebSearch,WebFetch"
+    CodexCliProvider().complete("hi", json_schema={"type": "object"})
+    cmd, cwd = calls[-1]
+    assert {"--ignore-user-config", "--ignore-rules", "--ephemeral"} <= set(cmd) and cmd[cmd.index("-C") + 1] == cwd
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only" and 'web_search="disabled"' in cmd
+    assert {"shell_tool", "browser_use", "computer_use", "apps", "plugins"} <= {cmd[i + 1] for i, x in enumerate(cmd)
+                                                                                 if x == "--disable"}
+    with pytest.raises(ValueError):
+        get_provider("claude-cli:opus --dangerously-skip-permissions")
+    with pytest.raises(ValueError):
+        get_provider("codex-cli:gpt;rm")
+    assert get_provider("claude-cli:claude-opus-4-1[1m]").model == "claude-opus-4-1[1m]"
+
+
+def test_private_files_and_dirs(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    from kumimasu import ops
+    from kumimasu.llm import CachedProvider
+
+    def mode(p):
+        return stat.S_IMODE(os.stat(p).st_mode)
+
+    monkeypatch.setattr(os, "umask", os.umask)
+    old = os.umask(0o022)
+    try:
+        w, _ = init_workdir(tmp_path / "w", PROJECT, [SAMPLES / "notes.md"])
+        ops.record(w, "agent-chat", "x")
+        cached = CachedProvider(FakeProvider(), tmp_path / "cache")
+        cached.complete("p")
+        files = list((tmp_path / "cache").rglob("*.json"))
+        assert mode(w.root) == 0o700 and mode(w.material_dir) == 0o700 and mode(w.material_dir / "notes.md") == 0o600
+        assert mode(w.root / "history.jsonl") == 0o600 and mode(w.project_file) == 0o600
+        assert mode(tmp_path / "cache") == 0o700 and mode(files[0].parent) == 0o700 and mode(files[0]) == 0o600
+    finally:
+        os.umask(old)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    with pytest.raises(StepError):
+        CachedProvider(FakeProvider(), shared).complete("p")
+
+
+def test_workdir_root_is_private_and_names_are_checked(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    root = Path(os.environ["HOME"]) / ".cache" / "kumimasu" / "work"
+    runner = CliRunner()
+    res = runner.invoke(app, ["init", str(root / "a"), "--topic", "t", "--audience", "a", "-m", str(SAMPLES / "notes.md")])
+    assert res.exit_code == 0, res.output
+    assert stat.S_IMODE(os.stat(root).st_mode) == 0o700
+    root.chmod(0o777)
+    res = runner.invoke(app, ["init", str(root / "b"), "--topic", "t", "--audience", "a"])
+    assert res.exit_code == 1 and "ほかのユーザーも書き込める" in res.output
+    root.chmod(0o700)
+    w = WorkDir(root / "a")
+    from kumimasu import ops
+
+    ops.set_stage(w, "drafting")
+    for args in (["check", str(w.root), "--draft", "../../etc/passwd"], ["polish", str(w.root), "--out", "x.md"],
+                 ["export", str(w.root), "--draft", "/etc/passwd"], ["confirm", str(w.root), "--agent", "--draft", "../a.md"]):
+        res = runner.invoke(app, args)
+        assert res.exit_code == 1 and "下書きのファイル名" in res.output, (args, res.output)
+    p = yaml.safe_load(w.project_file.read_text(encoding="utf-8"))
+    p["review_draft"] = "../secret.md"
+    w.project_file.write_text(yaml.safe_dump(p), encoding="utf-8")
+    with pytest.raises(StepError, match="review_draft"):
+        w.review_draft()
+
+
+def test_export_never_follows_a_symlink(tmp_path):
+    from datetime import datetime
+
+    from kumimasu.review import export_final
+
+    w, _ = init_workdir(tmp_path / "w", PROJECT, [])
+    w.write("draft.final.md", "final\n")
+    out = tmp_path / "out"
+    out.mkdir()
+    target = tmp_path / "victim.txt"
+    (out / "w-draft-20261005-1407.md").symlink_to(target)
+    dest = export_final(w, "draft.md", out, datetime(2026, 10, 5, 14, 7))
+    assert dest.name == "w-draft-20261005-1407-2.md" and not target.exists()

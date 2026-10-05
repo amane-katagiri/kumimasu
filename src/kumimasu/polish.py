@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .surface import GLUE, MIN_VOTES, RUNS, detect_surface
 from .check import dash_hits, load_keep, text_hash
@@ -45,7 +46,9 @@ class CountingProvider:
         return getattr(self.inner, "misses", self.calls)
 
 
-POLISH_PROMPT_JA = """次は記事の下書きと、その中で直す文の一覧です。一覧の文だけを直してください。ほかの文・段落・見出しの順番・表・コードには触れません。
+POLISH_PROMPT_JA = DATA_NOTE_JA + """
+
+次は記事の下書きと、その中で直す文の一覧です。一覧の文だけを直してください。ほかの文・段落・見出しの順番・表・コードには触れません。
 
 直し方:
 - 情報を運ばない文（道しるべ・決め台詞・「A ではなく B」の言い直し・立場や範囲の宣言・自分への但し書き）は、replacement を空文字にして消します。文の一部が情報を運んでいるなら、その情報だけを残した文に書き換えます。

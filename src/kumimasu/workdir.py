@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import tempfile
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar
@@ -11,29 +9,26 @@ from typing import TypeVar
 import yaml
 from pydantic import BaseModel
 
+from .errors import StepError
+from .files import atomic_write, create_new
 from .payload import InfoUnit, info_units
 from .model import Design, Interview, Project, Unit
 
 T = TypeVar("T", bound=BaseModel)
 
+DRAFT_NAME = re.compile(r"^draft[\w.\-]*\.md$")
 PROSE_SUFFIXES = {".md", ".markdown", ".txt", ".text", ""}
 CODE_CHUNK_LINES = 40
 
 
-class StepError(RuntimeError):
-    pass
+def check_draft_name(name: str) -> str:
+    if not DRAFT_NAME.fullmatch(name) or name.endswith(".prompt.md"):
+        raise ValueError(f"下書きのファイル名は、draft で始まり .md で終わる作業ディレクトリ直下の名前にしてください: {name!r}")
+    return name
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, path)
 
 
 def dump_yaml(data) -> str:
@@ -88,7 +83,11 @@ class WorkDir:
 
     def review_draft(self) -> str:
         """The draft the final check works on: the one the agent handed over, else this round's first draft."""
-        return (self.project().review_draft if self.project_file.exists() else "") or self.draft_base()
+        name = (self.project().review_draft if self.project_file.exists() else "") or self.draft_base()
+        try:
+            return check_draft_name(name)
+        except ValueError as e:
+            raise StepError(f"project.yaml の review_draft が使えません: {e}") from None
 
     def project(self) -> Project:
         return self._load(self.project_file, Project, "init")
@@ -151,13 +150,14 @@ def init_workdir(root: Path, project: Project, materials: list[Path]) -> tuple[W
     wd = WorkDir(root)
     if wd.project_file.exists():
         raise StepError(f"{wd.project_file} はすでにあります。別のディレクトリを指定してください")
-    wd.material_dir.mkdir(parents=True, exist_ok=True)
+    wd.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    wd.material_dir.mkdir(mode=0o700, exist_ok=True)
     names: list[str] = []
     for src in materials:
         name = src.name
         while name in names:
             name = f"{len(names)}-{src.name}"
-        shutil.copyfile(src, wd.material_dir / name)
+        create_new(wd.material_dir / name, Path(src).read_bytes())
         names.append(name)
     units: list[Unit] = []
     for name in names:

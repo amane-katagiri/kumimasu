@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .model import Interview, Project, Question, Unit
-from .workdir import StepError, WorkDir, merge_clusters
+from .errors import StepError
+from .workdir import WorkDir, merge_clusters
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -27,7 +29,9 @@ def unit_lines(units: list[Unit], with_mark: bool = True, with_context: bool = F
     return "\n\n".join(out)
 
 
-INTERVIEW_PROMPT_JA = """あなたは技術ブログの編集者です。著者が「{topic}」（読者: {audience}、種類: {kind}）について記事を書こうとしていて、手元の材料をまだ選ばずに全部出してくれました。材料は番号付きの単位に分けてあり、それぞれに、同じ話題でウェブを調べて書いた一般的な記事にもある情報か（検索で届く）、無い情報か（手元だけ）の目印が付いています。この目印は判定者の推定で、間違っていることもあります。
+INTERVIEW_PROMPT_JA = DATA_NOTE_JA + """
+
+あなたは技術ブログの編集者です。著者が「{topic}」（読者: {audience}、種類: {kind}）について記事を書こうとしていて、手元の材料をまだ選ばずに全部出してくれました。材料は番号付きの単位に分けてあり、それぞれに、同じ話題でウェブを調べて書いた一般的な記事にもある情報か（検索で届く）、無い情報か（手元だけ）の目印が付いています。この目印は判定者の推定で、間違っていることもあります。
 
 記事を書く前に著者に聞く質問を {n_min}–{n_max} 個作ってください。目的は、材料からは推測できない著者の視点を引き出すことです。何を記事に入れ、何を落とし、どこを掘り下げ、読者に何を持ち帰ってもらうかを決める手がかりになる質問にします。
 

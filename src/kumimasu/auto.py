@@ -6,10 +6,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from .glue import material_grams, traceable
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from . import ops
 from .interview import unit_lines
-from .workdir import StepError, WorkDir, merge_clusters
+from .errors import StepError
+from .workdir import WorkDir, merge_clusters
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -18,7 +20,9 @@ SOURCE = "auto"
 WARNING = ("auto は人の判断の代わりにエージェントが決めます。推奨しません。体験・感想・動機の質問には答えず、"
            "決めたことはすべて source=auto として handoff.json に残します。")
 
-AUTO_INTERVIEW_PROMPT_JA = """次は、記事の著者に聞く質問と、著者の手元の材料です。著者は今いないので、材料だけから答えられる質問にだけ答えます。
+AUTO_INTERVIEW_PROMPT_JA = DATA_NOTE_JA + """
+
+次は、記事の著者に聞く質問と、著者の手元の材料です。著者は今いないので、材料だけから答えられる質問にだけ答えます。
 
 各質問について kind を決めます。
 - selection: 記事に何を入れるか・削るか・どこまで扱うか（範囲）を聞く質問。
@@ -76,7 +80,9 @@ def auto_design(wd: WorkDir) -> dict:
     return ops.confirm(wd, SOURCE, note="auto: 設計の提案をそのまま受け入れた")
 
 
-AUTO_REVIEW_PROMPT_JA = """次は、記事の下書きで機械的な検出に当たった文です。著者は今いないので、各文を「残す」(keep) か「削る」(delete) に決めてください。書き直しはしません。
+AUTO_REVIEW_PROMPT_JA = DATA_NOTE_JA + """
+
+次は、記事の下書きで機械的な検出に当たった文です。著者は今いないので、各文を「残す」(keep) か「削る」(delete) に決めてください。書き直しはしません。
 
 - 削るのは、情報を運ばないことがはっきりしている文だけです: 道しるべ（「この記事では〜を書きます」）、つなぎの効用文（話題を読者の役立ちに結びつけるだけの文）、決め台詞。
 - 残すのは、著者の判断・意見・感想（「〜と考えています」「〜のつもりで入れた」）、事実・条件・手順・理由を含む文、迷う文すべてです。

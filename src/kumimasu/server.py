@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,19 +11,17 @@ from urllib.parse import quote, urlparse
 
 from pydantic import ValidationError
 
-from .llm import LLMError
+from .errors import LLMError
 from . import ops
 from .design import sync_design
-from .workdir import StepError, WorkDir
+from .errors import StepError
+from .workdir import DRAFT_NAME, WorkDir
 
 if TYPE_CHECKING:
     from .llm import Provider
 
 HOST = "127.0.0.1"
 SOURCE = "human-ui"
-
-
-DRAFT_NAME = re.compile(r"^draft[\w.\-]*\.md$")
 
 
 class WriteApp:

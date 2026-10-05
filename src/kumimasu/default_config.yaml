@@ -1,6 +1,7 @@
 providers:
   writer: claude-cli:opus
   baseline: claude-cli:opus
+  researcher: claude-cli:sonnet
   judge: claude-cli:sonnet
   interviewer: claude-cli:sonnet
   designer: claude-cli:sonnet
@@ -16,7 +17,7 @@ rules_file: ~/.config/kumimasu/rules.yaml
 serve:
   port: 8792
   poll_seconds: 3
-workdir_root: null
+workdir_root: ~/.cache/kumimasu/work
 defaults:
   register: keitai
   drop_list: topics

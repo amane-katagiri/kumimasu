@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .generate import ARTICLE_CLOSE, ARTICLE_OPEN, REGISTER_REQUEST_JA, WEB_RULES_JA, split_planned
+from .generate import ARTICLE_CLOSE, ARTICLE_OPEN, DATA_NOTE_JA, REGISTER_REQUEST_JA, SOURCES_RULES_JA, split_planned
 from .design import sync_design
 from .interview import unit_lines
 from .mark import KIND_LABEL
 from .model import Design, Project, Unit
+from .research import Research, research_block
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -73,16 +74,18 @@ def design_block(p: Project, d: Design, units: list[Unit], drop_list: str | None
     return "\n\n".join(x for x in parts if x)
 
 
-def draft_prompt(p: Project, d: Design, units: list[Unit], drop_list: str | None = None) -> str:
-    return "\n\n".join([design_block(p, d, units, drop_list), WEB_RULES_JA
-                        + "ウェブ調べは、材料の事実を確かめるか、材料の足りない所を補うためだけに使ってください。", OUTPUT_FORMAT_JA])
+def draft_prompt(p: Project, d: Design, units: list[Unit], drop_list: str | None = None,
+                 research: Research | None = None) -> str:
+    return "\n\n".join(x for x in (DATA_NOTE_JA, design_block(p, d, units, drop_list), research_block(research),
+                                    SOURCES_RULES_JA, OUTPUT_FORMAT_JA) if x)
 
 
-def draft(wd: WorkDir, writer: Provider, name: str = "draft.md", drop_list: str | None = None) -> str:
+def draft(wd: WorkDir, writer: Provider, name: str = "draft.md", drop_list: str | None = None,
+          research: Research | None = None) -> str:
     p = wd.project()
     units = wd.units()
     d = sync_design(wd.design(), units)
-    prompt = draft_prompt(p, d, units, drop_list)
+    prompt = draft_prompt(p, d, units, drop_list, research)
     wd.write(name.replace(".md", ".prompt.md"), prompt)
     write_used(wd, name, d, drop_list or d.drop_list, {"writer": f"{writer.name}:{writer.model}"})
     text = split_planned(writer.complete(prompt))[1]

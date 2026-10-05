@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .generate import WEB_RULES_JA, split_planned
+from .generate import DATA_NOTE_JA, SOURCES_RULES_JA, split_planned
 from .check import CheckReport, Fetch, check
 from .design import sync_design
 from .draft import OUTPUT_FORMAT_JA, design_block, write_used
+from .research import Research, load_research, research_block
 from .workdir import WorkDir
 
 if TYPE_CHECKING:
@@ -41,10 +42,10 @@ def instructions(rep: CheckReport, target_length: int) -> list[str]:
                 out.append("次の箇所は、材料に無い体験を著者の体験として書いています。消すか、材料にある事実だけに直してください。\n"
                            + _list([i["text"] for i in c.items]))
             case "numbers":
-                out.append("次の数値は材料に無く、出典もありません。ウェブで確かめて出典のリンクを付けるか、消してください。\n"
+                out.append("次の数値は材料に無く、出典もありません。ウェブ調査の結果に出典があればリンクを付け、無ければ消してください。\n"
                            + _list([f"{i['number']}（{i['context']}）" for i in c.items]))
             case "links":
-                out.append("次のリンクは開けませんでした。正しい出典に差し替えるか、消してください。\n"
+                out.append("次のリンクは開けませんでした。ウェブ調査の結果にある出典に差し替えるか、消してください。\n"
                            + _list([i["url"] for i in c.items if i.get("verdict") in ("dead", "unreachable")]))
             case "skip_unexplained":
                 out.append("次の事柄は、読者が知っている前提として説明しないと決めたのに、本文で説明しています。"
@@ -59,16 +60,18 @@ def instructions(rep: CheckReport, target_length: int) -> list[str]:
     return out
 
 
-def revise_prompt(block: str, draft: str, todo: list[str]) -> str:
-    return "\n\n".join([
+def revise_prompt(block: str, draft: str, todo: list[str], research: Research | None = None) -> str:
+    return "\n\n".join(x for x in [
+        DATA_NOTE_JA,
         "次の下書きを、設計に照らした検査で見つかった点だけ直して、全文を書き直してください。"
         "指摘の無い所は、できるだけそのまま残してください。",
         "# 直す点\n\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(todo, 1)),
         "# 下書き\n\n" + draft.strip(),
         "# 設計と材料（下書きを書いたときの依頼）\n\n" + block,
-        WEB_RULES_JA,
+        research_block(research),
+        SOURCES_RULES_JA,
         OUTPUT_FORMAT_JA,
-    ])
+    ] if x)
 
 
 def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None, fetch: Fetch | None = None,
@@ -83,7 +86,7 @@ def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None
     todo = instructions(rep, d.target_length)
     if not todo:
         return None, []
-    prompt = revise_prompt(design_block(p, d, units), wd.read(src), todo)
+    prompt = revise_prompt(design_block(p, d, units), wd.read(src), todo, load_research(wd))
     wd.write(dst.replace(".md", ".prompt.md"), prompt)
     write_used(wd, dst, d, d.drop_list, {"writer": f"{writer.name}:{writer.model}"})
     wd.write(dst, split_planned(writer.complete(prompt))[1])

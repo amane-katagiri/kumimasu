@@ -37,7 +37,8 @@ def test_defaults(places):
     assert cfg.provider("writer") == "claude-cli:opus" and cfg.provider("judge") == "claude-cli:sonnet"
     assert cfg.cache_dir == str(Path(os.environ["HOME"]) / ".cache" / "kumimasu")
     assert cfg.get("surface.runs") == 3 and cfg.get("serve.port") == 8792 and cfg.rules_path() is None
-    assert cfg.workdir_root.endswith("kumimasu") and cfg.source("cache_dir").startswith("default")
+    assert cfg.workdir_root == str(Path(os.environ["HOME"]) / ".cache" / "kumimasu" / "work")
+    assert cfg.source("cache_dir").startswith("default")
 
 
 def test_precedence_and_relative_paths(places):
@@ -50,13 +51,34 @@ def test_precedence_and_relative_paths(places):
     write(wdir / "project.yaml", p)
     cfg = load(wdir, cwd, {"providers.writer": "cli-writer"})
     assert cfg.provider("writer") == "cli-writer"
-    cfg = load(wdir, cwd)
+    cfg = load(wdir, cwd, trust=True)
     assert cfg.provider("writer") == "workdir-writer" and cfg.provider("judge") == "user-judge"
     assert cfg.get("surface.runs") == 5 and cfg.get("surface.min_votes") == 2
     assert cfg.cache_dir == str((cwd / "pcache").resolve()) and cfg.workdir_root == str((wdir / "tmpwork").resolve())
-    assert load(None, cwd).provider("writer") == "project-writer"
+    assert load(None, cwd, trust=True).provider("writer") == "project-writer"
     assert load(None, cwd / "..").cache_dir == str((user.parent / "ucache").resolve())
     assert cfg.source("providers.judge").startswith("user") and cfg.source("providers.writer").startswith("workdir")
+
+
+def test_project_and_workdir_layers_are_untrusted_for_sensitive_keys(places, monkeypatch):
+    cwd, user, wdir = places
+    write(cwd / "kumimasu.yaml", {"providers": {"writer": "codex-cli"}, "cache_dir": "/tmp/x", "workdir_root": "w",
+                                  "rules_file": "../outside.yaml", "surface": {"runs": 4},
+                                  "defaults": {"forms": "表にする"}})
+    p = yaml.safe_load((wdir / "project.yaml").read_text(encoding="utf-8"))
+    p["config"] = {"providers": {"judge": "codex-cli"}, "rules_file": "/etc/rules.yaml"}
+    write(wdir / "project.yaml", p)
+    cfg = load(wdir, cwd)
+    assert cfg.provider("writer") == "claude-cli:opus" and cfg.provider("judge") == "claude-cli:sonnet"
+    assert cfg.cache_dir.endswith("/.cache/kumimasu") and cfg.rules_path() is None
+    assert cfg.get("surface.runs") == 4 and cfg.get("defaults.forms") == "表にする"
+    assert len(cfg.warnings()) == 6 and all("--trust-project" in w for w in cfg.warnings())
+    assert load(wdir, cwd, trust=True).provider("writer") == "codex-cli"
+    monkeypatch.setenv("KUMIMASU_TRUST_PROJECT", "1")
+    assert load(wdir, cwd).provider("judge") == "codex-cli"
+    monkeypatch.delenv("KUMIMASU_TRUST_PROJECT")
+    out = CliRunner().invoke(app, ["config", str(wdir)]).output
+    assert "注意:" in out and "[使わない:" in out
 
 
 def test_errors_and_rules_file(places):
@@ -107,11 +129,14 @@ def test_cli_override_and_config_command(places, monkeypatch):
                         __import__("kumimasu.llm", fromlist=["FakeProvider"]).FakeProvider(lambda p: '{"questions": []}'))
     r = CliRunner()
     assert r.invoke(app, ["interview", str(wdir)]).exit_code == 0
-    assert r.invoke(app, ["interview", str(wdir), "--provider", "fake:cli", "--overwrite"]).exit_code == 0
-    assert seen == [("fake:from-project", str((cwd / "c").resolve())), ("fake:cli", str((cwd / "c").resolve()))]
-    out = r.invoke(app, ["config", str(wdir)]).output
+    assert r.invoke(app, ["--trust-project", "interview", str(wdir), "--overwrite"]).exit_code == 0
+    assert r.invoke(app, ["--trust-project", "interview", str(wdir), "--provider", "fake:cli", "--overwrite"]).exit_code == 0
+    home_cache = str(Path(os.environ["HOME"]) / ".cache" / "kumimasu")
+    assert seen == [("claude-cli:sonnet", home_cache), ("fake:from-project", str((cwd / "c").resolve())),
+                    ("fake:cli", str((cwd / "c").resolve()))]
+    out = r.invoke(app, ["--trust-project", "config", str(wdir)]).output
     assert "providers.interviewer" in out and "fake:from-project" in out and "project" in out
-    rows = json.loads(r.invoke(app, ["config", "--json"]).output)
+    rows = json.loads(r.invoke(app, ["config", "--json"]).stdout)
     assert {x["key"]: x["layer"] for x in rows}["providers.writer"] == "default"
 
 

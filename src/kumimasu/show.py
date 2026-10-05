@@ -35,7 +35,7 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
         by = {u.id: u for u in units}
         snap["design"] = {
             "file": wd.design_file.name, "purpose": d.purpose, "takeaways": d.takeaways, "target_length": d.target_length,
-            "order": d.order, "avoid": d.avoid,
+            "order": d.order, "avoid": d.avoid, "research": d.research, "forms": d.forms, "form_prefs": d.form_prefs,
             "units": {use: [{"id": u.id, "text": _short(by[u.id].text, 40), "searchable": by[u.id].searchable or "answer"}
                             for u in d.units if u.use == use and u.id in by] for use in ("deep", "mention", "drop")},
             "skip": [s.model_dump() for s in d.skip], "aside": [a.model_dump() for a in d.aside],
@@ -79,6 +79,9 @@ def text(snap: dict) -> str:
         lines += [f"警告: {w}" for w in d["warnings"]]
         if d["avoid"]:
             lines.append("書かない話題: " + " / ".join(d["avoid"]))
+        lines += [f"調べること {i}: {t}" for i, t in enumerate(d["research"], 1)]
+        if d["forms"] or d["form_prefs"]:
+            lines.append("形: " + " / ".join(d["forms"]) + (f"  好み: {d['form_prefs']}" if d["form_prefs"] else ""))
         lines += [f"ルール {r['n']:2} [{'on ' if r['on'] else 'off'}] {r['text']}" for r in d["rules"]]
     if r := snap.get("review"):
         lines.append(f"\n[最終チェック {r['draft']}]  結果: {r['final'] or '（まだ）'}"

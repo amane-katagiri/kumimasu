@@ -8,7 +8,6 @@ Relative paths resolve against the directory of the file that sets them. Nothing
 from __future__ import annotations
 
 import os
-import tempfile
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -16,10 +15,12 @@ from typing import Any
 
 import yaml
 
+from .errors import ConfigError
+
 ENV = "KUMIMASU_CONFIG"
 USER_FILE = Path("~/.config/kumimasu/config.yaml")
 PROJECT_FILE = "kumimasu.yaml"
-ROLES = ("writer", "baseline", "judge", "interviewer", "designer", "detector", "rewriter", "auto")
+ROLES = ("writer", "baseline", "researcher", "judge", "interviewer", "designer", "detector", "rewriter", "auto")
 KEYS: dict[str, type] = {**{f"providers.{r}": str for r in ROLES},
                          "surface.runs": int, "surface.min_votes": int, "surface.max_rounds": int,
                          "cache_dir": str, "rules_file": str, "serve.port": int, "serve.poll_seconds": float,
@@ -29,10 +30,8 @@ KEYS: dict[str, type] = {**{f"providers.{r}": str for r in ROLES},
                          "interview.always_ask": list}
 CHOICES = {"defaults.register": ("keitai", "joutai"), "defaults.drop_list": ("topics", "full", "none")}
 PATH_KEYS = ("cache_dir", "rules_file", "workdir_root")
-
-
-class ConfigError(ValueError):
-    pass
+TRUST_ENV = "KUMIMASU_TRUST_PROJECT"
+UNTRUSTED_LAYERS = ("workdir", "project")
 
 
 def _flatten(data: Any, where: str, prefix: str = "") -> dict[str, Any]:
@@ -79,6 +78,21 @@ class Layer:
     name: str
     path: str
     values: dict[str, Any]
+    ignored: list[str] = field(default_factory=list)
+
+
+def sensitive(key: str, raw: Any) -> bool:
+    if key.startswith("providers.") or key in ("cache_dir", "workdir_root"):
+        return True
+    if key == "rules_file" and isinstance(raw, str):
+        p = Path(raw)
+        return raw.startswith("~") or p.is_absolute() or ".." in p.parts
+    return False
+
+
+def _layer(name: str, where: str, flat: dict[str, Any], base: Path | None, trust: bool) -> Layer:
+    ignored = [] if trust or name not in UNTRUSTED_LAYERS else [k for k, v in flat.items() if sensitive(k, v)]
+    return Layer(name, where, {k: _coerce(k, v, where, base) for k, v in flat.items() if k not in ignored}, ignored)
 
 
 @dataclass
@@ -109,7 +123,12 @@ class Config:
 
     @property
     def workdir_root(self) -> str:
-        return self.get("workdir_root") or str(Path(tempfile.gettempdir()) / "kumimasu")
+        return self.get("workdir_root")
+
+    def warnings(self) -> list[str]:
+        return [f"{layer.path} の {key} は使いません（このフォルダや作業ディレクトリの設定は、LLM の呼び方・キャッシュ・"
+                f"作業場所・外のルールファイルを変えられません。信頼するなら --trust-project か {TRUST_ENV}=1）"
+                for layer in self.layers for key in layer.ignored]
 
     def rules_path(self) -> Path | None:
         """The rules file to use, or None for the packaged default rules. The default location is optional;
@@ -128,10 +147,9 @@ class Config:
         rows = []
         for key in KEYS:
             value, layer = self._pick(key)
-            if key == "workdir_root" and value is None:
-                value = self.workdir_root
-            rows.append({"key": key, "value": value, "layer": layer.name if layer else "computed",
-                         "file": layer.path if layer else ""})
+            rows.append({"key": key, "value": value, "layer": layer.name if layer else "-",
+                         "file": layer.path if layer else "",
+                         "ignored": [x.path for x in self.layers if key in x.ignored]})
         return rows
 
 
@@ -140,27 +158,31 @@ def user_path() -> Path:
     return Path(env).expanduser() if env else USER_FILE.expanduser()
 
 
-def _file_layer(name: str, path: Path) -> Layer | None:
+def _file_layer(name: str, path: Path, trust: bool) -> Layer | None:
     if not path.is_file():
         return None
     where = str(path)
-    flat = _flatten(yaml.safe_load(path.read_text(encoding="utf-8")), where)
-    base = path.resolve().parent
-    return Layer(name, where, {k: _coerce(k, v, where, base) for k, v in flat.items()})
+    return _layer(name, where, _flatten(yaml.safe_load(path.read_text(encoding="utf-8")), where), path.resolve().parent,
+                  trust)
 
 
-def load(workdir: Path | None = None, cwd: Path | None = None, cli: dict[str, Any] | None = None) -> Config:
+def trusted_by_env() -> bool:
+    return os.environ.get(TRUST_ENV, "") not in ("", "0")
+
+
+def load(workdir: Path | None = None, cwd: Path | None = None, cli: dict[str, Any] | None = None,
+         trust: bool = False) -> Config:
+    trust = trust or trusted_by_env()
     layers: list[Layer] = []
     if cli:
         layers.append(Layer("cli", "command line", {k: v for k, v in cli.items() if v is not None}))
     if workdir is not None and (workdir / "project.yaml").is_file():
         data = yaml.safe_load((workdir / "project.yaml").read_text(encoding="utf-8")) or {}
         where = str(workdir / "project.yaml")
-        flat = _flatten(data.get("config") or {}, where + " config")
-        base = workdir.resolve()
-        layers.append(Layer("workdir", where, {k: _coerce(k, v, where, base) for k, v in flat.items()}))
+        layers.append(_layer("workdir", where, _flatten(data.get("config") or {}, where + " config"), workdir.resolve(),
+                             trust))
     for name, path in (("project", (cwd or Path.cwd()) / PROJECT_FILE), ("user", user_path())):
-        if (layer := _file_layer(name, path)) is not None:
+        if (layer := _file_layer(name, path, trust)) is not None:
             layers.append(layer)
     text = resources.files("kumimasu").joinpath("default_config.yaml").read_text(encoding="utf-8")
     flat = _flatten(yaml.safe_load(text), "default_config.yaml")
@@ -170,10 +192,13 @@ def load(workdir: Path | None = None, cwd: Path | None = None, cli: dict[str, An
 
 TEMPLATE = """# kumimasu の設定。書いた値だけが下の層（ユーザー → 同梱の既定）より優先されます。
 # 相対パスは、このファイルのあるディレクトリから解決します。
+# ./kumimasu.yaml と作業ディレクトリの project.yaml の config: では、providers・cache_dir・workdir_root と、
+# 絶対パスや .. を含む rules_file は、--trust-project（または KUMIMASU_TRUST_PROJECT=1）のときだけ使います。
 #
 # providers:              # 役割ごとの LLM（claude-cli:opus / claude-cli:sonnet / codex-cli / anthropic:... / fake）
-#   writer: claude-cli:opus       # draft・revise
-#   baseline: claude-cli:opus     # mark のウェブ調査ありの一般的な記事
+#   writer: claude-cli:opus       # draft・revise（ツールなし）
+#   baseline: claude-cli:opus     # mark のウェブ調査ありの一般的な記事（送るのは題と読者だけ）
+#   researcher: claude-cli:sonnet # 下書きの前のウェブ調査（送るのは題・読者・ねらい・持ち帰り・調べることだけ）
 #   judge: claude-cli:sonnet      # mark の網羅の判定、check の判定
 #   interviewer: claude-cli:sonnet
 #   designer: claude-cli:sonnet   # design・noise・review
@@ -189,7 +214,7 @@ TEMPLATE = """# kumimasu の設定。書いた値だけが下の層（ユーザ�
 # serve:
 #   port: 8792
 #   poll_seconds: 3
-# workdir_root: /tmp/kumimasu   # 「一時的な場所」を選んだときの作業ディレクトリの置き場
+# workdir_root: ~/.cache/kumimasu/work   # 「一時的な場所」を選んだときの作業ディレクトリの置き場（700 で作る）
 # defaults:                # 新しい設計の既定（kumimasu prefs diff / save で、記事での変更を書き戻せる）
 #   register: keitai       # keitai（です・ます）/ joutai（だ・である）
 #   drop_list: topics      # 書かない事柄の載せ方: topics / full / none

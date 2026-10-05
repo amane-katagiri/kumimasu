@@ -168,4 +168,4 @@ def test_prefs_diff_and_save(cwd):
     assert yaml.safe_load(user_cfg().read_text(encoding="utf-8"))["defaults"]["avoid"] == ["毎回の自己紹介"]
     assert all(x.value != "毎回の自己紹介" for x in prefs_diff(w))
     run("prefs", "nope", w.root, code=2)
-    assert json.loads(run("config", w.root, "--json"))[-1]["key"] == "interview.always_ask"
+    assert json.loads(CliRunner().invoke(app, ["config", str(w.root), "--json"]).stdout)[-1]["key"] == "interview.always_ask"

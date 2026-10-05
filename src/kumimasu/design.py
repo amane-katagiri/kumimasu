@@ -3,17 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .config import load
 from .interview import unit_lines
 from .model import ASIDE_MAX, SKIP_MAX, USES, Aside, Conflict, Design, Project, Skip, Unit, UnitUse
 from .rules import default_rules
-from .workdir import StepError, WorkDir
+from .errors import StepError
+from .workdir import WorkDir
 
 if TYPE_CHECKING:
     from .llm import Provider
 
-DESIGN_PROMPT_JA = """著者が「{topic}」について記事を書きます。読者は{audience}、記事の種類は「{kind}」、長さは {length} 字くらいです。下に、著者の材料（番号付きの単位）と、編集者の質問への著者の回答があります。材料の目印「検索で届く」は、同じ話題でウェブを調べて書いた一般的な記事にもある情報、「手元だけ」はそこに無い情報です。目印は推定で、間違っていることもあります。回答の単位は [q1] のような番号です。
+DESIGN_PROMPT_JA = DATA_NOTE_JA + """
+
+著者が「{topic}」について記事を書きます。読者は{audience}、記事の種類は「{kind}」、長さは {length} 字くらいです。下に、著者の材料（番号付きの単位）と、編集者の質問への著者の回答があります。材料の目印「検索で届く」は、同じ話題でウェブを調べて書いた一般的な記事にもある情報、「手元だけ」はそこに無い情報です。目印は推定で、間違っていることもあります。回答の単位は [q1] のような番号です。
 
 記事の設計を提案してください。
 
@@ -26,6 +30,7 @@ DESIGN_PROMPT_JA = """著者が「{topic}」について記事を書きます。
   why には理由を短く書きます。
 - order: 話の順番についての緩い手がかりを 0–4 個（例:「q2 の動機から始める」）。節の一覧は作りません。
 - forms: 内容が並び・手順・比較・コードのときに使う形（表・コード・箇条書き）を、どの単位に使うかと合わせて 0–4 個。
+- research: 記事のために、ウェブで確かめるか補うとよい一般的な事柄を 0–5 個。調査役にはこの一覧と、題・読者・ねらい・持ち帰りだけが渡り、材料と回答は渡りません。だから材料の文・著者の体験・著者の環境やプロジェクトに固有の名前は写さず、それぞれ 40 字以内の名詞句か問いにします。
 
 著者の回答のうち、選び方の指示（「伝えた方がいい」「絞ってよい」「いらない」など）だけで材料としての事実を含まないものは、その指示をほかの単位の use に反映し、回答そのものは drop にします。
 
@@ -36,9 +41,13 @@ DESIGN_PROMPT_JA = """著者が「{topic}」について記事を書きます。
 {units}"""
 
 
+RESEARCH_MAX = 5
+RESEARCH_CHARS = 60
+
+
 def design_schema() -> dict:
     return {"type": "object", "additionalProperties": False,
-            "required": ["purpose", "takeaways", "units", "order", "forms"],
+            "required": ["purpose", "takeaways", "units", "order", "forms", "research"],
             "properties": {
                 "purpose": {"type": "string"},
                 "takeaways": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
@@ -47,7 +56,8 @@ def design_schema() -> dict:
                     "properties": {"id": {"type": "string"}, "use": {"type": "string", "enum": list(USES)},
                                    "why": {"type": "string"}}}},
                 "order": {"type": "array", "items": {"type": "string"}},
-                "forms": {"type": "array", "items": {"type": "string"}}}}
+                "forms": {"type": "array", "items": {"type": "string"}},
+                "research": {"type": "array", "items": {"type": "string"}, "maxItems": RESEARCH_MAX}}}
 
 
 def design_prompt(p: Project, units: list[Unit], forms: str = "") -> str:
@@ -73,7 +83,9 @@ def parse_design(raw: str, p: Project, units: list[Unit], rules_path: Path | Non
     return Design(purpose=str(data.get("purpose", "")).strip(), kind=p.kind,
                   takeaways=[t.strip() for t in data.get("takeaways", []) if str(t).strip()][:3], units=uses,
                   order=[str(x) for x in data.get("order", [])], target_length=p.length,
-                  forms=[str(x) for x in data.get("forms", [])], rules=default_rules(rules_path))
+                  forms=[str(x) for x in data.get("forms", [])], rules=default_rules(rules_path),
+                  research=[t for t in (str(x).strip() for x in data.get("research", [])) if 0 < len(t) <= RESEARCH_CHARS]
+                  [:RESEARCH_MAX])
 
 
 def design(wd: WorkDir, provider: Provider, overwrite: bool = False) -> Design:
@@ -106,7 +118,9 @@ def baseline_text(wd: WorkDir) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-NOISE_PROMPT_JA = """著者が「{topic}」について記事を書きます（読者: {audience}、種類: {kind}）。下に、同じ話題でウェブを調べて書いた一般的な記事（W）と、著者の材料と回答（番号付きの単位、いまの use 付き）があります。
+NOISE_PROMPT_JA = DATA_NOTE_JA + """
+
+著者が「{topic}」について記事を書きます（読者: {audience}、種類: {kind}）。下に、同じ話題でウェブを調べて書いた一般的な記事（W）と、著者の材料と回答（番号付きの単位、いまの use 付き）があります。
 
 人が書いた記事には、一般的な記事なら必ずある説明が抜けていたり、本題に要らない話が混じっていたりします。それは書き手が「読者はこれを知っている」「ここで自分は引っかかった」と選んだ結果です。この記事の設計にも、その選択を少しだけ入れます。
 
@@ -204,7 +218,9 @@ def noise_workdir(wd: WorkDir, provider: Provider) -> Design:
     return d
 
 
-REVIEW_PROMPT_JA = """著者が「{topic}」について記事を書きます。下の「使う材料」はすべて記事に載せ、「使わない材料」は載せないと決めました。
+REVIEW_PROMPT_JA = DATA_NOTE_JA + """
+
+著者が「{topic}」について記事を書きます。下の「使う材料」はすべて記事に載せ、「使わない材料」は載せないと決めました。
 
 (a) conflicts: 使わない材料のそれぞれについて、使う材料を記事に載せるだけで、その情報が記事に出てしまうか（level）を判定してください。
   - yes: 使う材料（コード・設定・手順を含む）を書けば、使わない材料の情報がほぼそのまま出る

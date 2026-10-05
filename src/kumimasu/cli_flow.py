@@ -11,7 +11,7 @@ import typer
 from . import ops
 from .cli import DirArg, SourceOpt, _cfg, _fail, _llm, _wd, app
 from .model import SOURCES, STAGES
-from .workdir import StepError
+from .errors import StepError
 
 
 def _source(source: str) -> str:
@@ -58,7 +58,8 @@ def _index(n: str, size: int) -> int:
 
 @app.command("set")
 def set_(path: DirArg,
-         what: Annotated[str, typer.Argument(help="unit | takeaway | purpose | order | length | skip | aside | avoid")],
+         what: Annotated[str, typer.Argument(help="unit | takeaway | purpose | order | length | skip | aside | avoid | "
+                                                  "research | forms")],
          args: Annotated[list[str] | None, typer.Argument(help="See the examples below")] = None,
          use: Annotated[str | None, typer.Option("--use", help="deep | mention | drop (for `unit`)")] = None,
          label: Annotated[str, typer.Option("--label", help="Skip label (for `skip ID on`)")] = "",
@@ -73,7 +74,9 @@ def set_(path: DirArg,
     set DIR order "hint 1" "hint 2"   (no hints clears the list)
     set DIR skip m5 on [--label "ISBN の構造"]  |  set DIR skip m5 off
     set DIR aside m42 on [--where "API を比べた所"]  |  set DIR aside m42 off
-    set DIR avoid add "FAQ"  |  set DIR avoid rm 1"""
+    set DIR avoid add "FAQ"  |  set DIR avoid rm 1
+    set DIR research add "exiftool の -d の書式"  |  set DIR research rm 1   (sent to the web researcher)
+    set DIR forms "比較は表"   (the form preferences shown to the designer and the writer)"""
     wd = _wd(path)
     a = list(args or [])
     src = _source(source)
@@ -86,8 +89,8 @@ def set_(path: DirArg,
                 if len(a) != 1 or use is None:
                     raise ValueError("usage: set DIR unit ID --use deep|mention|drop")
                 return {"units": {a[0]: use}}
-            case "takeaway" | "avoid":
-                cur = list(d.takeaways if what == "takeaway" else d.avoid)
+            case "takeaway" | "avoid" | "research":
+                cur = list({"takeaway": d.takeaways, "avoid": d.avoid, "research": d.research}[what])
                 if a[:1] == ["add"] and len(a) == 2:
                     cur.append(a[1])
                 elif a[:1] == ["rm"] and len(a) == 2:
@@ -98,11 +101,11 @@ def set_(path: DirArg,
                     raise ValueError(f"usage: set DIR {what} add TEXT | rm N" + (" | N TEXT" if what == "takeaway" else ""))
                 if what == "takeaway" and len(cur) > 3:
                     raise ValueError("takeaways are at most 3")
-                return {"takeaways" if what == "takeaway" else "avoid": cur}
-            case "purpose":
+                return {{"takeaway": "takeaways"}.get(what, what): cur}
+            case "purpose" | "forms":
                 if len(a) != 1:
-                    raise ValueError("usage: set DIR purpose TEXT")
-                return {"purpose": a[0]}
+                    raise ValueError(f"usage: set DIR {what} TEXT")
+                return {"purpose" if what == "purpose" else "form_prefs": a[0]}
             case "order":
                 return {"order": a}
             case "length":
@@ -296,7 +299,8 @@ def config(target: Annotated[str | None, typer.Argument(help="Work directory, or
         return
     for r in rows:
         where = r["layer"] + (f" ({r['file']})" if r["file"] and r["layer"] != "default" else "")
-        typer.echo(f"{r['key']:26} {r['value']!s:40} {where}")
+        ignored = "".join(f"  [使わない: {f}]" for f in r["ignored"])
+        typer.echo(f"{r['key']:26} {r['value']!s:40} {where}{ignored}")
 
 
 ScopeOpt = Annotated[str | None, typer.Option("--scope", help="user | project")]

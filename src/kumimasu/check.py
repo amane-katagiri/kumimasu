@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import yaml
 from pydantic import BaseModel
 
-from .factcheck import UrlStatus, check_url, extract_urls, firsthand_hits
+from .factcheck import UrlStatus, check_urls, extract_urls, firsthand_hits
+from .generate import DATA_NOTE_JA
 from .llm import extract_json
 from .metadiscourse import code_free_lines, sentences, split_units
 from .parts.lint import lint as parts_lint
@@ -57,7 +58,9 @@ class CheckReport(BaseModel):
         return [c for c in self.failed() if not c.surface]
 
 
-MAP_PROMPT_JA = """次は、著者の材料（[m3] や [q1] の番号の単位）と、それをもとに書かれた記事の下書き（[1] のような番号の単位）です。
+MAP_PROMPT_JA = DATA_NOTE_JA + """
+
+次は、著者の材料（[m3] や [q1] の番号の単位）と、それをもとに書かれた記事の下書き（[1] のような番号の単位）です。
 
 (a) units: 下書きの単位ごとに、次の 2 つを答えてください。
   - from: その単位が伝えている情報のもとになった材料の単位の番号（最大 6 つ）。材料に無い情報だけなら空の配列。
@@ -174,7 +177,7 @@ def number_flags(markdown: str, material: str) -> tuple[list[dict], list[dict]]:
     return flagged, cited
 
 
-Fetch = Callable[[str], UrlStatus]
+Fetch = Callable[[list[str]], list[UrlStatus]]
 
 
 def _c(id: str, relation: str, passed: bool | None, value=None, detail: str = "", items: list[dict] | None = None) -> Check:
@@ -282,7 +285,7 @@ def run_checks(draft: str, units: list[Unit], d: Design, judge: Provider, meta: 
         checks.append(_c("links", "材料に無いリンク → 開ける", None, len(new_urls), "確かめていない（--verify-links）",
                          [{"url": u} for u in new_urls]))
     else:
-        st = [fetch(u) for u in new_urls]
+        st = fetch(new_urls)
         bad = [s for s in st if s.verdict in ("dead", "unreachable")]
         checks.append(_c("links", "材料に無いリンク → 開ける", not bad, f"{len(new_urls) - len(bad)}/{len(new_urls)}",
                          "", [{"url": s.url, "verdict": s.verdict, "status": s.status} for s in st]))
@@ -380,5 +383,5 @@ def check_stem(draft_name: str, surface_only: bool = False) -> str:
     return draft_name.removesuffix(".md").replace("draft", "check") + (".surface" if surface_only else "")
 
 
-def default_fetch(url: str) -> UrlStatus:
-    return check_url(url)
+def default_fetch(urls: list[str]) -> list[UrlStatus]:
+    return check_urls(urls)

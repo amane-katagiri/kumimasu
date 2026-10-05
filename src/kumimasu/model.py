@@ -114,6 +114,7 @@ class Design(BaseModel):
     rules: list[Rule] = []
     avoid: list[str] = []
     avoid_proposed: list[str] = []
+    research: list[str] = []
     drop_list: DropList = "topics"
     conflicts: list[Conflict] = []
     skip: list[Skip] = []
