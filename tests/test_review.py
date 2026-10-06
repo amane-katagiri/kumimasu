@@ -4,6 +4,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 import yaml
@@ -232,6 +233,10 @@ def test_server_final_check_round_trip(wd):
         assert c.get("/api/review/draft.prompt.md")[0] == 404
         assert c.get("/api/review/..%2Fproject.yaml")[0] == 404
         assert "最終チェック" in c.page()[:2][1]
+        wd.write("draft-日本語.md", DRAFT)
+        assert {"name": "draft-日本語.md", "final": None} in c.get("/api/drafts")[1]["drafts"]
+        code, r = c.get(f"/api/review/{quote('draft-日本語.md')}")
+        assert code == 200 and r["draft"] == "draft-日本語.md"
 
 
 def test_server_rejects_ill_typed_review_bodies(wd):

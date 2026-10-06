@@ -7,7 +7,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from pydantic import ValidationError
 
@@ -282,7 +282,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._json({"version": v} | app.stage(), headers=etag)
                 return
-            parts = path.strip("/").split("/")
+            parts = [unquote(x) for x in path.strip("/").split("/")]
             if method == "GET" and len(parts) == 3 and parts[:2] == ["api", "download"]:
                 fname, data = app.download(parts[2])
                 self._send(200, data, "text/markdown; charset=utf-8",
