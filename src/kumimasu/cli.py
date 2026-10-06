@@ -217,9 +217,10 @@ def serve(path: DirArg, port: Annotated[int | None, typer.Option("--port", help=
     Edits autosave to the YAML files."""
     wd = cc.workdir(path)
     cfg = cc.config(path)
-    run_server(WriteApp(wd, lambda: cc.llm(cfg, "rewriter", rewriter), cfg.get("serve.poll_seconds"),
-                        lambda: cc.llm(cfg, "judge")),
-               cfg.resolve("serve.port", port))
+    with errors():
+        run_server(WriteApp(wd, lambda: cc.llm(cfg, "rewriter", rewriter), cfg.get("serve.poll_seconds"),
+                            lambda: cc.llm(cfg, "judge")),
+                   cfg.resolve("serve.port", port))
 
 
 def _research(wd: WorkDir, cfg: Config, researcher: str | None, refresh: bool) -> Research:

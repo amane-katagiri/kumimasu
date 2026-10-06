@@ -2,6 +2,7 @@
 directory > the user file ($KUMIMASU_CONFIG, else ~/.config/kumimasu/config.yaml) > the packaged defaults."""
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from importlib import resources
@@ -24,6 +25,7 @@ KEYS: dict[str, type] = {**{f"providers.{r}": str for r in ROLES},
                          "defaults.noise.skip_max": int, "defaults.noise.aside_max": int, "defaults.forms": str,
                          "defaults.max_material_ratio": float, "defaults.chars_per_mention": int,
                          "interview.always_ask": list}
+MINIMUM = {"serve.poll_seconds": 0.5}
 CHOICES = {"defaults.register": ("keitai", "joutai"), "defaults.drop_list": ("topics", "full", "none")}
 PATH_KEYS = ("cache_dir", "rules_file", "workdir_root")
 TRUST_ENV = "KUMIMASU_TRUST_PROJECT"
@@ -59,6 +61,8 @@ def _coerce(key: str, value: Any, where: str, base: Path | None) -> Any:
         value = want(value)
     except (TypeError, ValueError) as e:
         raise ConfigError(f"{where}: {key} は {want.__name__} にしてください") from e
+    if key in MINIMUM and not (math.isfinite(value) and value >= MINIMUM[key]):
+        raise ConfigError(f"{where}: {key} は {MINIMUM[key]} 以上の数にしてください")
     if key in CHOICES and value not in CHOICES[key]:
         raise ConfigError(f"{where}: {key} は {', '.join(CHOICES[key])} のどれかにしてください")
     if key in PATH_KEYS:

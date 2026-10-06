@@ -350,7 +350,10 @@ def make_server(app: WriteApp, port: int, token: str) -> Server:
 
 def serve(app: WriteApp, port: int) -> None:
     token = secrets.token_urlsafe(32)
-    server = make_server(app, port, token)
+    try:
+        server = make_server(app, port, token)
+    except OSError as e:
+        raise StepError(f"{HOST}:{port} で待ち受けられません（{e.strerror or e}）。--port で別のポートを指定してください") from None
     print(f"kumimasu: http://{HOST}:{server.server_address[1]}/?token={token}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()

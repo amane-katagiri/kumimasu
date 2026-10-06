@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,12 @@ def test_errors_and_rules_file(places):
     write(cwd / "kumimasu.yaml", {"surface": {"runs": "many"}})
     with pytest.raises(ConfigError, match="surface.runs は int"):
         load(wdir, cwd)
+    for bad in (0, -1, 0.1, ".nan", ".inf"):
+        (cwd / "kumimasu.yaml").write_text(f"serve:\n  poll_seconds: {bad}\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="serve.poll_seconds は 0.5 以上"):
+            load(wdir, cwd)
+    write(cwd / "kumimasu.yaml", {"serve": {"poll_seconds": 0.5}})
+    assert load(wdir, cwd).get("serve.poll_seconds") == 0.5
     write(cwd / "kumimasu.yaml", {"rules_file": "my-rules.yaml"})
     with pytest.raises(ConfigError, match="がありません"):
         load(wdir, cwd).rules_path()
@@ -152,3 +159,12 @@ def test_config_init_writes_template_only_when_asked(places):
     with pytest.raises(ConfigError):
         init_template(cwd / "kumimasu.yaml")
     assert r.invoke(app, ["config", "init"]).exit_code != 0
+
+
+def test_serve_on_a_busy_port_fails_cleanly(places):
+    _cwd, _user, wdir = places
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        res = CliRunner().invoke(app, ["serve", str(wdir), "--port", str(busy.getsockname()[1])])
+    assert res.exit_code == 1 and "--port で別のポート" in res.output and "Traceback" not in res.output
