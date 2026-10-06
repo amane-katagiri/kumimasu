@@ -991,6 +991,9 @@ document.addEventListener("mousedown", (e) => { if (REF.id && !e.target.closest(
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && REF.id) { const a = REF.anchor; closeRef(); a?.focus(); } });
 
 async function confirmStage() {
+  const frozen = [$("main"), $("#fc-pop"), $("#confirm-bar")];
+  if (frozen[2].inert) return;
+  frozen.forEach((n) => { n.inert = true; });
   try {
     if (!(await flushPending())) return;
     status("確定中…");
@@ -999,6 +1002,7 @@ async function confirmStage() {
     adopt(r);
     status(`確定しました。エージェントに渡しました（次: ${r.stage.labels[r.stage.stage]}）`);
   } catch (e) { if (!(e instanceof Stale)) status("確定できません: " + e.message, true); }
+  finally { frozen.forEach((n) => { n.inert = false; }); }
 }
 
 function cpLen(text) {
@@ -1370,7 +1374,8 @@ function newItemPop(t) {
   pop.innerHTML = `<div class="k">${itemHead({ kind: "user" })}</div><div class="quote">「${esc(t.quote.slice(0, 120))}」</div>
     ${decisionButtons("")}<textarea id="fc-note" aria-label="メモ" placeholder="書き直すときのメモ（任意）"></textarea>`;
   pop.querySelectorAll("button[data-d]").forEach((b) => b.addEventListener("click", () => {
-    FC.items.push({ kind: "user", start: t.start, end: t.end, text: t.quote, decision: b.dataset.d, note: pop.querySelector("#fc-note").value });
+    FC.items.push({ id: "user-" + crypto.randomUUID().slice(0, 8), kind: "user", start: t.start, end: t.end, text: t.quote,
+      decision: b.dataset.d, note: pop.querySelector("#fc-note").value, edited: ++FC.edits });
     window.getSelection().removeAllRanges();
     pop.hidden = true;
     saveReview(true);
@@ -1389,15 +1394,22 @@ function saveReview(now) {
 async function pushReview(repaint) {
   status("保存中…");
   try {
-    const items = FC.items.map((i) => ({ ...(i.id ? { id: i.id } : {}), decision: i.decision, note: i.note, start: i.start, end: i.end,
+    const items = FC.items.map((i) => ({ id: i.id, decision: i.decision, note: i.note, start: i.start, end: i.end,
       ...(i.rewrite ? { result: i.rewrite.result } : {}), ...(i.regenerate ? { regenerate: true } : {}) }));
-    const sent = FC.edits;
-    const r = await write(draftPath("review"), "PUT", { items, remove: FC.removed });
-    FC.items = r.items.map((n) => keepLaterEdits(n, FC.items.find((o) => o.id === n.id), sent)); FC.dirty = r.dirty; FC.removed = [];
+    const sent = FC.edits, removed = FC.removed;
+    const r = await write(draftPath("review"), "PUT", { items, remove: removed });
+    FC.removed = FC.removed.filter((id) => !removed.includes(id));
+    FC.items = mergeItems(r.items, sent); FC.dirty = r.dirty;
     setApplyEnabled();
     if (repaint) paintFinal(); else renderItems();
     status("保存しました");
   } catch (e) { if (!(e instanceof Stale)) status("保存できません: " + e.message, true); throw e; }
+}
+
+function mergeItems(items, sent) {
+  const ids = new Set(items.map((n) => n.id));
+  return items.filter((n) => !FC.removed.includes(n.id)).map((n) => keepLaterEdits(n, FC.items.find((o) => o.id === n.id), sent))
+    .concat(FC.items.filter((o) => !ids.has(o.id) && o.edited > sent));
 }
 
 function keepLaterEdits(n, o, sent) {
@@ -1412,7 +1424,7 @@ async function applyFinal() {
     status("反映中…");
     const sent = FC.edits;
     const a = await write(draftPath("apply"), "POST", {});
-    FC.items = a.review.items.map((n) => keepLaterEdits(n, FC.items.find((o) => o.id === n.id), sent));
+    FC.items = mergeItems(a.review.items, sent);
     FC.dirty = a.review.dirty || FC.edits > sent;
     FC.lastApply = a.result; FC.final = a.final;
     FC.finals[FC.draft] = a.result.out;
