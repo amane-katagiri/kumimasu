@@ -1406,12 +1406,20 @@ async function applyFinal() {
   try {
     if (!(await flushPending())) return;
     status("反映中…");
+    const sent = FC.edits;
     const a = await write(draftPath("apply"), "POST", {});
-    FC.items = a.review.items; FC.dirty = a.review.dirty;
+    FC.items = a.review.items.map((n) => keepLaterEdits(n, FC.items.find((o) => o.id === n.id), sent));
+    FC.dirty = a.review.dirty || FC.edits > sent;
     FC.lastApply = a.result; FC.final = a.final;
     FC.finals[FC.draft] = a.result.out;
     const opt = [...$("#fc-draft").options].find((o) => o.value === FC.draft);
     if (opt) opt.textContent = `${FC.draft}（反映済み）`;
+    // Switching to the read-only result would close the item being edited, so stay on the draft.
+    if (FC.edits > sent) {
+      renderItems(); setApplyEnabled();
+      status("反映しました: " + a.result.out + "（反映中の変更はまだ反映していません。もう一度「反映」を押してください）");
+      return;
+    }
     FC.viewing = false;
     await toggleResult();
     showDiff();
