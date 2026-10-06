@@ -106,6 +106,8 @@ def _inline(cur: _Cursor, text: str) -> str:
                 case "html_inline":
                     if (fig := figure_text(c.content)) is not None:
                         out.append(_figure(fig, "span", " inline"))
+                    else:
+                        out.append(f'<code class="html">{_text(cur, c.content)}</code>')
                 case "image":
                     cur.skip_image()
                     out.append(f'<span class="img-ph inline">画像: {escape(_alt(c))}</span>')

@@ -97,6 +97,8 @@ def test_figure_markers_extracted_rendered_and_handed_off(tmp_path):
     html = render(FIG_DRAFT + "\n段落の中 <!-- 図: 小さな図 --> です。\n\n<!-- ただのコメント -->\n<script>x</script>\n")[0]
     assert 'class="fig-ph"' in html and "<b>図</b>撮影日時の無い 9 枚" in html and 'class="fig-ph inline"' in html
     assert "<script>" not in html and "&lt;!-- ただのコメント --&gt;" in html
+    html = render("段落 <img src=x onerror=alert(1)> と <span style=\"display:none\">隠し</span> です。\n")[0]
+    assert "<img" not in html and "<span style" not in html and '<code class="html"><span data-s="3">&lt;img src=x' in html
     p = scripted(draft_text=FIG_DRAFT)
     w = designed(tmp_path / "w", p)
     ops.confirm(w, "agent-chat")
