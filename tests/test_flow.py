@@ -393,6 +393,7 @@ def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):
         assert c.post("/api/confirm", {"note": "x"}, headers={"Origin": "https://evil.example"})[0] == 403
         assert c.post("/api/confirm", headers={"Origin": f"http://localhost:{port}"})[0] != 403
         assert c.request("/api/confirm", "POST", raw=b'{"note": "x"}', headers={"Content-Type": "text/plain"})[0] == 415
+        assert c.request("/api/confirm", "POST", raw=b'{}', headers={"Content-Type": "application/jsonx"})[0] == 415
         assert c.request("/api/confirm", "POST", raw=b"[1]")[0] == 400
         assert c.request("/api/confirm", "POST", raw=b"{nope")[0] == 400
         assert c.request("/api/confirm", "POST", raw=b"{}", headers={"Content-Length": "-1"})[0] == 400
@@ -431,6 +432,19 @@ def test_server_refuses_cross_site_fetches_even_with_the_token(wd):
         assert c.request("/api/version", token=None, headers={"If-None-Match": '"x"'})[0] == 403
         assert c.get("/api/state", token="トークン".encode().decode("latin-1"))[0] == 403
         assert ops.stage(wd) == "interview"
+
+
+def test_server_logs_internal_errors_but_tells_the_page_little(wd, monkeypatch, capfd):
+    def boom(self):
+        raise RuntimeError("秘密の詳細")
+    monkeypatch.setattr(server_mod.WriteApp, "state", boom)
+    with serving(wd) as c:
+        code, body = c.get("/api/state")
+        assert c.request("/api/confirm", "POST", raw=b'{"note": "x"}',
+                         headers={"Content-Type": "application/json; charset=utf-8"})[0] == 500
+    err = capfd.readouterr().err
+    assert code == 500 and body == {"error": "サーバーの内部エラーです"}
+    assert "Traceback" in err and "秘密の詳細" in err
 
 
 def test_server_drops_idle_connections(wd, monkeypatch):

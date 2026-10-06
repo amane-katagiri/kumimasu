@@ -18,7 +18,6 @@ def _plain(block: str) -> str:
 
 
 def figure_markers(markdown: str) -> list[dict]:
-    """Figure markers the writer left for a later step to draw; `near` is the paragraph just before (or after) it."""
     code = code_ranges(markdown)
     spans = blocks(markdown)
     out = []

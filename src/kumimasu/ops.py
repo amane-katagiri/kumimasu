@@ -154,9 +154,6 @@ class DesignEdit(BaseModel):
 
 
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
-    """The design edits of the page, as one body (DesignEdit). A unit set to a non-drop use leaves its skip; a unit set
-    to drop leaves the asides. A one word makes the unit author and clearing it makes it bare; a unit that becomes
-    mention without a land becomes bare."""
     edit = DesignEdit.model_validate(body)
     with LOCK:
         require_stage(wd, "design", action="設計の変更")

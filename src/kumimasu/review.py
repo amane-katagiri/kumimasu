@@ -96,6 +96,10 @@ def _item_id(kind: str, category: str, text: str) -> str:
     return f"{kind}-{hashlib.sha1(f'{kind}|{category}|{norm(text)}'.encode()).hexdigest()[:10]}"
 
 
+def _why(it: dict) -> str:
+    return f"{it['why']}\n直し方: {it['fix']}" if it["fix"] else it["why"]
+
+
 def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str]) -> list[Item]:
     out: dict[str, Item] = {}
     by_du = {d.id: d for d in info_units(src)}
@@ -141,12 +145,10 @@ def items_from_checks(src: str, reports: list[CheckReport], units: dict[str, str
                         add("number", "", it["context"], (at, at + len(it["number"])) if at >= 0 else None,
                             reason=c.relation)
                     case "reader":
-                        why = f"{it['why']}\n直し方: {it['fix']}" if it["fix"] else it["why"]
-                        add("reader", READER_KIND_LABEL[it["kind"]], it["quote"], locate(src, it["quote"]), reason=why,
+                        add("reader", READER_KIND_LABEL[it["kind"]], it["quote"], locate(src, it["quote"]), reason=_why(it),
                             unit={"id": it["unit"], "text": units.get(it["unit"], it["unit_text"])} if it["unit"] else None)
                     case "form":
-                        why = f"{it['why']}\n直し方: {it['fix']}" if it["fix"] else it["why"]
-                        add("form", READER_KIND_LABEL[it["kind"]], it["quote"], locate(src, it["quote"]), reason=why)
+                        add("form", READER_KIND_LABEL[it["kind"]], it["quote"], locate(src, it["quote"]), reason=_why(it))
                     case "links":
                         if it.get("verdict", "ok") != "ok":
                             at = src.find(it["url"])
@@ -224,9 +226,6 @@ def current_text(it: Item, src: str) -> str:
 
 
 def mark_flags(it: Item, src: str) -> None:
-    """An item keeps its offsets into the base draft and the sentence its result (or the user's item) was made from.
-    If the draft no longer has that sentence at those offsets, re-anchor to its only exact occurrence; if it is missing
-    or occurs more than once, the item is stale and its result is not applied."""
     made = it.rewrite.made_from if it.rewrite else (it.text if it.kind == "user" else "")
     it.stale = False
     if made and current_text(it, src) != made:

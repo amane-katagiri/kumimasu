@@ -1,5 +1,3 @@
-"""Markdown → HTML for the reader. Every text run carries `data-s`, its code-point offset in the source, so a browser
-selection maps back to source offsets; every block carries its Part path and source span."""
 from __future__ import annotations
 
 from html import escape

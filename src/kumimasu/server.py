@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import traceback
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
@@ -199,12 +200,6 @@ class WriteApp:
         return self.state()
 
 
-ERRORS: tuple[tuple[tuple[type[Exception], ...], int], ...] = (
-    ((StepError,), 409),
-    ((ValueError, TypeError, ValidationError, LLMError), 400),
-)
-
-
 def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
     page = resources.files("kumimasu").joinpath("index.html").read_bytes().replace(TOKEN_SLOT, token.encode())
     token_bytes = token.encode()
@@ -257,7 +252,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 raise HttpError(403, "kumimasu serve が表示した URL（token 付き）を開いてください")
 
         def _body(self) -> dict:
-            if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
                 raise HttpError(415, "Content-Type は application/json にしてください")
             try:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -322,9 +317,13 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 self._route(method, url.path)
             except HttpError as e:
                 self._json({"error": str(e)} | ({"stale": True} if isinstance(e, Stale) else {}), e.code)
-            except Exception as e:  # noqa: BLE001
-                code = next((c for kinds, c in ERRORS if isinstance(e, kinds)), 500)
-                self._json({"error": app.public(str(e)) if code != 500 else "サーバーの内部エラーです"}, code)
+            except StepError as e:
+                self._json({"error": app.public(str(e))}, 409)
+            except (ValueError, TypeError, ValidationError, LLMError) as e:
+                self._json({"error": app.public(str(e))}, 400)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                self._json({"error": "サーバーの内部エラーです"}, 500)
 
         def do_GET(self) -> None:
             self._handle("GET")
