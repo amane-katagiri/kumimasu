@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -197,6 +198,37 @@ def test_apply_deletes_and_rewrites_with_one_call(wd):
     save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "keep"}]})
     res2 = apply_review(wd, "draft.md", None)
     assert res2.calls == 0 and res2.rewritten == 0
+
+
+def test_server_rewrites_outside_the_lock_and_refuses_a_stale_result(wd):
+    standard_report(wd)
+    rev = load_review(wd, "draft.md")
+    meta = next(i for i in rev.items if i.kind == "meta")
+    glue = next(i for i in rev.items if i.kind == "glue")
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    started, go = threading.Event(), threading.Event()
+
+    def slow(prompt: str) -> str:
+        started.set()
+        go.wait(5)
+        return json.dumps({"items": [{"id": glue.id, "replacement": "縦書きで読める。"}]})
+
+    rewriter = FakeProvider(slow)
+    with serving(wd, lambda: rewriter) as c:
+        out = {}
+        t = threading.Thread(target=lambda: out.update(r=c.post("/api/apply/draft.md")))
+        t.start()
+        assert started.wait(5)
+        code, _ = c.put("/api/review/draft.md", {"items": [{"id": meta.id, "decision": "delete"}]})
+        assert code == 200
+        go.set()
+        t.join(5)
+        code, body = out["r"]
+        assert code == 409 and body["stale"] is True and not (wd.root / "draft.final.md").exists()
+        assert len(rewriter.calls) == 1
+        code, r = c.post("/api/apply/draft.md")
+        assert code == 200 and r["result"]["calls"] == 1 and r["result"]["deleted"] == 1 and len(rewriter.calls) == 2
+        assert "- 縦書きで読める。" in r["final"]["markdown"]
 
 
 def test_server_final_check_round_trip(wd):

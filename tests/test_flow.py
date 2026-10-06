@@ -4,6 +4,8 @@ import json
 import re
 import shutil
 import socket
+import subprocess
+import sys
 import threading
 import time
 
@@ -380,6 +382,31 @@ def test_server_refuses_writes_from_a_stale_version(wd):
         assert code == 428 and wd.interview().questions[0].answer == "CLI から"
         code, body = c.put("/api/interview", {"answers": {"q1": "新しい画面から"}}, headers={"X-Kumimasu-Version": c.version()})
         assert code == 200 and body["version"] == c.version()
+
+
+@pytest.mark.skipif(ops.fcntl is None, reason="no flock")
+def test_writes_wait_for_another_process_holding_the_lock(wd):
+    hold = ("import fcntl, os, sys, time\n"
+            "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "print('held', flush=True)\n"
+            "time.sleep(0.5)\n")
+    other = subprocess.Popen([sys.executable, "-c", hold, str(wd.root / ops.LOCK_FILE)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert other.stdout.readline().strip() == "held"
+        start = time.monotonic()
+        ops.answer(wd, "q1", "待ってから", "agent-chat")
+        assert time.monotonic() - start > 0.3 and other.poll() is not None
+    finally:
+        other.wait(5)
+    assert wd.interview().questions[0].answer == "待ってから"
+
+
+def test_server_refuses_deeply_nested_json(wd):
+    with serving(wd) as c:
+        deep = b'{"answers": ' + b"[" * 100_000 + b"]" * 100_000 + b"}"
+        code, body, _ = c.request("/api/interview", "PUT", raw=deep)
+        assert code == 400 and "JSON" in body["error"]
 
 
 def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):

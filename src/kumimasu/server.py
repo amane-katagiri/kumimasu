@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 import traceback
 from collections.abc import Callable
+from functools import cached_property
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import TYPE_CHECKING
@@ -20,6 +22,7 @@ from .errors import LLMError, StepError
 from .figures import figure_markers
 from .interview import SEARCHABLE_LABEL
 from .land import NOTE_QUESTION
+from .llm import forget
 from .model import REGISTER_LABEL, USE_LABEL
 from .render import render
 from .review import (
@@ -74,6 +77,41 @@ class Stale(HttpError):
         super().__init__(409, "ほかの所（エージェントや別のタブ）で先に変更されています")
 
 
+class Deferred(Exception):
+    def __init__(self, fetch: Callable[[], None]) -> None:
+        super().__init__("LLM の呼び出しをロックの外へ回します")
+        self.fetch = fetch
+
+
+class Prefetched:
+    def __init__(self, make: Callable[[], Provider], answers: dict) -> None:
+        self.make = make
+        self.answers = answers
+
+    @cached_property
+    def inner(self) -> Provider:
+        return self.make()
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    @property
+    def model(self) -> str:
+        return self.inner.model
+
+    def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
+        key = (prompt, system, json.dumps(json_schema, sort_keys=True))
+        if key not in self.answers:
+            def fetch() -> None:
+                self.answers[key] = self.inner.complete(prompt, system=system, json_schema=json_schema)
+            raise Deferred(fetch)
+        return self.answers[key]
+
+    def forget(self, prompt: str, json_schema: dict | None = None) -> None:
+        forget(self.inner, prompt, json_schema)
+
+
 def text_field(body: dict, key: str) -> str:
     value = body.get(key, "")
     if not isinstance(value, str):
@@ -88,6 +126,24 @@ class WriteApp:
         self.rewriter = rewriter
         self.judge = judge
         self.poll_seconds = poll_seconds
+        self.local = threading.local()
+
+    def write(self, sent: str, call: Callable[[], dict]) -> dict:
+        # An LLM call can take minutes, so it is made outside the lock (Deferred) and call is run again with the
+        # answer; the version check on the retry refuses it if someone else wrote meanwhile.
+        self.local.answers = {}
+        while True:
+            with ops.locked(self.wd):
+                if sent != ops.version(self.wd):
+                    raise Stale
+                try:
+                    return call()
+                except Deferred as d:
+                    fetch = d.fetch
+            fetch()
+
+    def provider(self, make: Callable[[], Provider]) -> Provider:
+        return Prefetched(make, self.local.answers)
 
     def drafts(self) -> dict:
         return {"drafts": [{"name": b, "final": final_name(b) if self.wd.is_plain_file(final_name(b)) else None}
@@ -144,15 +200,16 @@ class WriteApp:
 
     def apply(self, name: str) -> dict:
         name = self.draft_name(name)
-        with ops.LOCK:
-            ctx = ReviewContext.load(self.wd, name)
-            res = ops.apply(self.wd, name, self.rewriter() if ctx.needs_rewrite_call() and self.rewriter else None, SOURCE,
-                            ctx=ctx)
-            after = ReviewContext.load(self.wd, name)
+        ctx = ReviewContext.load(self.wd, name)
+        res = ops.apply(self.wd, name, self.provider(self.rewriter) if ctx.needs_rewrite_call() and self.rewriter else None,
+                        SOURCE, ctx=ctx)
+        after = ReviewContext.load(self.wd, name)
         return {"result": res.model_dump(), "review": self._review(after, with_html=False), "final": self._final(after)}
 
     def confirm(self, body: dict) -> dict:
-        handoff = ops.confirm(self.wd, SOURCE, text_field(body, "note"), self.rewriter)
+        rewriter = self.rewriter
+        handoff = ops.confirm(self.wd, SOURCE, text_field(body, "note"),
+                              (lambda: self.provider(rewriter)) if rewriter else None)
         return {"handoff": handoff} | self.state()
 
     def restart(self, body: dict) -> dict:
@@ -161,12 +218,6 @@ class WriteApp:
             raise TypeError("from と mode は文字列にしてください")
         event = ops.restart(self.wd, from_stage, SOURCE, mode, text_field(body, "note"))
         return {"restart": event} | self.state()
-
-    def version(self) -> str:
-        return ops.version(self.wd)
-
-    def stage(self) -> dict:
-        return ops.stage_info(self.wd)
 
     def state(self) -> dict:
         wd = self.wd
@@ -192,7 +243,7 @@ class WriteApp:
     def followup(self, body: dict) -> dict:
         if self.judge is None:
             raise StepError("聞き返しの判定役が設定されていません")
-        ops.followup(self.wd, self.judge(), SOURCE)
+        ops.followup(self.wd, self.provider(self.judge), SOURCE)
         return self.state()
 
     def save_design(self, body: dict) -> dict:
@@ -264,7 +315,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 raise HttpError(413, "本文が大きすぎます")
             try:
                 data = json.loads(self.rfile.read(n) or b"{}")
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
                 raise HttpError(400, "本文が JSON ではありません") from None
             if not isinstance(data, dict):
                 raise HttpError(400, "本文は JSON のオブジェクトにしてください")
@@ -277,12 +328,12 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                            {"Content-Security-Policy": PAGE_CSP.format(nonce=nonce)})
                 return
             if method == "GET" and path == "/api/version":
-                v = app.version()
+                v = ops.version(app.wd)
                 etag = {"ETag": f'"{v}"'}
                 if self.headers.get("If-None-Match") == etag["ETag"]:
                     self._send(304, b"", None, etag)
                 else:
-                    self._json({"version": v} | app.stage(), headers=etag)
+                    self._json({"version": v} | ops.stage_info(app.wd), headers=etag)
                 return
             parts = [unquote(x) for x in path.strip("/").split("/")]
             if method == "GET" and len(parts) == 3 and parts[:2] == ["api", "download"]:
@@ -301,14 +352,10 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 self._json(call({}))
                 return
             body = self._body()
-            with ops.LOCK:
-                sent = self.headers.get(VERSION_HEADER)
-                if sent is None:
-                    raise HttpError(428, f"{VERSION_HEADER} がありません")
-                if sent != app.version():
-                    raise Stale
-                data = call(body)
-            self._json(data)
+            sent = self.headers.get(VERSION_HEADER)
+            if sent is None:
+                raise HttpError(428, f"{VERSION_HEADER} がありません")
+            self._json(app.write(sent, lambda: call(body)))
 
         def _handle(self, method: str) -> None:
             url = urlparse(self.path)

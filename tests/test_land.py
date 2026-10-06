@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 
 import pytest
 from conftest import (
@@ -303,6 +304,32 @@ def test_rewriting_a_one_word_clears_its_followup(wd):
     p = scripted()
     ops.followup(wd, p, "agent")
     assert not p.calls
+
+
+def test_followup_page_asks_outside_the_lock(wd):
+    _followup_design(wd)
+    started, go = threading.Event(), threading.Event()
+    inner = scripted()
+
+    def slow(prompt: str) -> str:
+        started.set()
+        go.wait(5)
+        return inner.complete(prompt)
+
+    p = FakeProvider(slow)
+    with serving(wd, judge=lambda: p) as c:
+        out = {}
+        t = threading.Thread(target=lambda: out.update(r=c.post("/api/followup")))
+        t.start()
+        assert started.wait(5)
+        assert c.put("/api/design", {"purpose": "途中で直した"})[0] == 200
+        go.set()
+        t.join(5)
+        assert out["r"][0] == 409 and out["r"][1]["stale"] is True
+        assert wd.design().purpose == "途中で直した" and all(u.followup_state is None for u in wd.design().units)
+        code, state = c.post("/api/followup")
+        assert code == 200 and any(u["followup_state"] == "asked" for u in state["design"]["units"])
+        assert len(p.calls) == 2
 
 
 def test_followup_page_and_stage(tmp_path, wd):

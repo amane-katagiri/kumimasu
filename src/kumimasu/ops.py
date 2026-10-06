@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
@@ -21,7 +23,7 @@ from .design import (
 from .draft import read_used
 from .errors import StepError
 from .figures import figure_markers
-from .files import append_jsonl, atomic_write, read_jsonl
+from .files import PRIVATE_FILE, append_jsonl, atomic_write, read_jsonl
 from .land import propose_followups, with_answer
 from .model import (
     LANDS,
@@ -51,6 +53,11 @@ from .terms import clear_promotion, explain_term
 from .textutil import excerpt
 from .workdir import WorkDir, now
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 if TYPE_CHECKING:
     from .llm import Provider
 
@@ -62,10 +69,30 @@ HUMAN_STAGES = ("interview", "design", "review")
 WHO = {"human-ui": "human", "agent-chat": "human", "auto": "auto", "agent": "agent"}
 STAGE_LABEL = {"interview": "インタビュー", "design": "設計", "drafting": "下書き", "review": "最終チェック", "done": "完了"}
 LOCK = threading.RLock()
+LOCK_FILE = ".lock"
+_held = False
 
 
 class StageError(StepError):
     pass
+
+
+@contextmanager
+def locked(wd: WorkDir) -> Iterator[None]:
+    global _held
+    with LOCK:
+        # flock from a second descriptor would block this same process, so nested callers reuse the outer lock.
+        if _held or fcntl is None:
+            yield
+            return
+        fd = os.open(wd.root / LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, PRIVATE_FILE)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            _held = True
+            yield
+        finally:
+            _held = False
+            os.close(fd)
 
 
 def stage(wd: WorkDir) -> str:
@@ -94,7 +121,7 @@ def set_stage(wd: WorkDir, new: str, round_: int | None = None) -> None:
 
 
 def save_answers(wd: WorkDir, answers: dict, source: str) -> Interview:
-    with LOCK:
+    with locked(wd):
         require_stage(wd, "interview", action="質問への回答")
         iv = wd.interview()
         by_id = {q.id: q for q in iv.questions}
@@ -155,7 +182,7 @@ class DesignEdit(BaseModel):
 
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
     edit = DesignEdit.model_validate(body)
-    with LOCK:
+    with locked(wd):
         require_stage(wd, "design", action="設計の変更")
         units = {u.id: u for u in wd.units()}
         d = sync_design(wd.design(), list(units.values()))
@@ -249,7 +276,7 @@ def with_followups(d: Design, answers: dict[str, str]) -> Design:
 
 
 def followup(wd: WorkDir, provider: Provider, source: str) -> Design:
-    with LOCK:
+    with locked(wd):
         require_stage(wd, "design", action="一言の聞き返し")
         units = wd.units()
         d, calls = propose_followups(sync_design(wd.design(), units), wd.project(), units, provider)
@@ -283,7 +310,7 @@ def toggled_aside(d: Design, unit_id: str, on: bool, where: str) -> list[Aside]:
 
 
 def decide(wd: WorkDir, base: str, body: dict, source: str) -> Review:
-    with LOCK:
+    with locked(wd):
         require_stage(wd, "review", action="最終チェックの決定")
         require_base(base)
         rev = save_decisions(wd, base, body, source)
@@ -294,7 +321,7 @@ def decide(wd: WorkDir, base: str, body: dict, source: str) -> Review:
 
 def apply(wd: WorkDir, base: str, provider: Provider | None, source: str, regenerate: tuple[str, ...] = (),
           ctx: ReviewContext | None = None) -> ApplyResult:
-    with LOCK:
+    with locked(wd):
         require_stage(wd, "review", action="反映")
         res = apply_review(wd, base, provider, regenerate, ctx)
         record(wd, source, "apply", draft=base, calls=res.calls, regenerate=list(regenerate))
@@ -310,7 +337,7 @@ def article_info(wd: WorkDir, final_text: str) -> dict:
 
 def confirm(wd: WorkDir, source: str, note: str = "", rewriter: Callable[[], Provider] | None = None,
             draft: str = "") -> dict:
-    with LOCK:
+    with locked(wd):
         p = wd.project()
         cur = p.stage
         if cur == "done":
@@ -418,7 +445,7 @@ def restart(wd: WorkDir, from_stage: str, source: str, mode: str | None = None, 
     if mode not in modes:
         raise ValueError(f"「{STAGE_LABEL[from_stage]}」からのやり直しに {mode} は使えません"
                          f"（使えるのは {'・'.join(modes)}）")
-    with LOCK:
+    with locked(wd):
         p = wd.project()
         if STAGES.index(from_stage) >= STAGES.index(p.stage):
             raise StageError(f"やり直せるのは今より前の段階だけです（今は「{STAGE_LABEL[p.stage]}」、"
