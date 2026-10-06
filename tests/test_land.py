@@ -81,7 +81,11 @@ def test_draft_prompt_names_bare_units_and_adds_the_one_word(wd):
     assert "- [m4] LINE の写真に撮影日時が無い" in bare_part and "- 「触れる材料」のすべて" in bare_part
     assert "足さないことを断ったりもしません" in bare_part and "[q1]" not in bare_part
     assert "- [q1] 意外だった" in author_part and "整えすぎません" in author_part
-    assert "地の文の文体で言い切る" in author_part and "「〜と思いました」" in author_part
+    assert "地の文の文体で言い切ります" in author_part and "「〜と思いました」" in author_part
+    assert "必要な文数で書き出します" in author_part and "短い 1 文" not in author_part
+    assert "一言に書かれていることは、著者自身の材料です" in author_part
+    assert "1 文のまま書き、文を割って説明調にしません" in author_part
+    assert "一言だけで段落を作るのは、記事全体で多くても 1 回までにします" in author_part
     assert "材料に無い文で段落を埋めません" in author_part and "段落の頭・途中・末尾" not in author_part
     assert "著者の一言: 正直ちょっと拍子抜けした" in _section(prompt, "掘り下げる材料")
     assert "[m7]" not in land
