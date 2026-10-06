@@ -404,7 +404,7 @@ mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-
 <script nonce="{{KUMIMASU_NONCE}}">
 const S = { data: null, filter: "all", timers: {}, version: "", viewing: null, lastInput: 0, unitsKey: "" };
 const FC = { draft: null, html: "", items: [], removed: [], table: [], timer: null, finals: {}, final: null,
-  viewing: false, dirty: false, lastApply: null };
+  viewing: false, dirty: false, lastApply: null, edits: 0 };
 const COLOR = { yes: "var(--yes)", partial: "var(--partial)", no: "var(--no)", null: "var(--line)" };
 const FILTERS = { all: "すべて", firsthand: "手元だけ・回答", searchable: "検索で届く" };
 const USE_FILTERS = { write: "書く", deep: "掘り下げる", mention: "触れる", drop: "書かない" };
@@ -457,7 +457,7 @@ function write(path, method, body) {
 
 async function conflict() {
   W.epoch++;
-  Object.values(S.timers).forEach(clearTimeout);
+  Object.values(S.timers).forEach((t) => clearTimeout(t.id));
   S.timers = {};
   clearTimeout(FC.timer);
   FC.timer = null;
@@ -628,8 +628,9 @@ function renderDesign() {
     debounce("skip", () => save("/api/design", { skip: d.skip }, false));
   }));
   $("#followup")?.addEventListener("click", async () => {
+    if (!(await flushPending())) return;
     status("聞き返しを考えています…");
-    try { S.data = await write("/api/followup", "POST", {}); status("保存しました"); renderUnits(); renderDesign(); }
+    try { S.data = await write("/api/followup", "POST", {}); await settled(); status("保存しました"); renderUnits(); renderDesign(); }
     catch (e) { if (!(e instanceof Stale)) status("聞き返せません: " + e.message, true); }
   });
   box.querySelectorAll("input[data-followup]").forEach((el) => el.addEventListener("change", () =>
@@ -748,20 +749,42 @@ function renderConflicts() {
 
 function debounce(key, fn) {
   status("未保存");
-  clearTimeout(S.timers[key]);
-  S.timers[key] = setTimeout(() => { delete S.timers[key]; fn(); }, 600);
+  clearTimeout(S.timers[key]?.id);
+  S.timers[key] = { fn, id: setTimeout(() => { delete S.timers[key]; fn(); }, 600) };
+}
+
+async function flushPending() {
+  const fns = Object.values(S.timers).map((t) => { clearTimeout(t.id); return t.fn; });
+  S.timers = {};
+  const runs = fns.map((fn) => fn());
+  if (FC.timer) {
+    clearTimeout(FC.timer);
+    FC.timer = null;
+    runs.push(pushReview(false).then(() => true, () => false));
+  }
+  const ok = (await Promise.all(runs)).every((x) => x !== false);
+  await W.chain;
+  return ok;
+}
+
+async function settled() {
+  let ok = true;
+  do ok = (await flushPending()) && ok; while (Object.keys(S.timers).length || FC.timer);
+  return ok;
 }
 
 async function save(path, body, rerender) {
+  if (rerender && !(await flushPending())) return false;
   status("保存中…");
   try {
     S.data = await write(path, "PUT", body);
     status("保存しました");
-    if (rerender) { renderUnits(); renderDesign(); return; }
+    if (rerender) { await settled(); renderUnits(); renderDesign(); return true; }
     if (unitsKey() !== S.unitsKey) renderUnits();
     else renderFilters();
     if (S.data.design) { renderCounts(); renderLoad(); renderTerms(); renderConflicts(); }
-  } catch (e) { if (!(e instanceof Stale)) status("保存できません: " + e.message, true); }
+    return true;
+  } catch (e) { if (!(e instanceof Stale)) status("保存できません: " + e.message, true); return false; }
 }
 
 function renderAll() {
@@ -860,6 +883,7 @@ function openRestart(s, opts) {
     const mode = dlg.querySelector("input[name=mode]:checked").value;
     const go = $("#restart-go");
     go.disabled = true;
+    if (!(await flushPending())) { go.disabled = false; return; }
     try {
       const r = await write("/api/restart", "POST", { from: s, mode, note: $("#restart-note").value });
       dlg.close();
@@ -962,7 +986,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && REF.id) 
 
 async function confirmStage() {
   try {
-    if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
+    if (!(await flushPending())) return;
     status("確定中…");
     const r = await write("/api/confirm", "POST", { note: $("#confirm-note").value });
     $("#confirm-note").value = "";
@@ -1057,6 +1081,7 @@ async function openFinal() {
 }
 
 async function loadDraft(name) {
+  await flushPending();
   FC.draft = name;
   FC.viewing = false;
   FC.final = null;
@@ -1290,7 +1315,7 @@ function itemPop(id, rect) {
   const refresh = () => { const n = cur(); if (n) { pop.querySelector("#fc-rewrite").innerHTML = rewriteBlock(n); bindRewrite(); } };
   const bindRewrite = () => {
     pop.querySelector("#fc-rewrite-text")?.addEventListener("input", (e) => {
-      const c = cur(); if (c && c.rewrite) { c.rewrite.result = e.target.value; c.rewrite.source = "user"; saveReview(false); }
+      const c = cur(); if (c && c.rewrite) { c.rewrite.result = e.target.value; c.rewrite.source = "user"; c.edited = ++FC.edits; saveReview(false); }
     });
     pop.querySelector("#fc-regen")?.addEventListener("click", async () => {
       const c = cur(); if (!c) return;
@@ -1303,6 +1328,7 @@ function itemPop(id, rect) {
   pop.querySelectorAll("button[data-d]").forEach((b) => b.addEventListener("click", async () => {
     const c = cur(); if (!c) return;
     c.decision = b.dataset.d;
+    c.edited = ++FC.edits;
     markDecision(c);
     await saveReview(true);
     refresh();
@@ -1310,6 +1336,7 @@ function itemPop(id, rect) {
   pop.querySelector("#fc-note").addEventListener("input", (e) => {
     const c = cur(); if (!c) return;
     c.note = e.target.value;
+    c.edited = ++FC.edits;
     if (c.note && !c.decision) { c.decision = "rewrite"; markDecision(c); }
     saveReview(false);
   });
@@ -1358,17 +1385,24 @@ async function pushReview(repaint) {
   try {
     const items = FC.items.map((i) => ({ ...(i.id ? { id: i.id } : {}), decision: i.decision, note: i.note, start: i.start, end: i.end,
       ...(i.rewrite ? { result: i.rewrite.result } : {}), ...(i.regenerate ? { regenerate: true } : {}) }));
+    const sent = FC.edits;
     const r = await write(draftPath("review"), "PUT", { items, remove: FC.removed });
-    FC.items = r.items; FC.dirty = r.dirty; FC.removed = [];
+    FC.items = r.items.map((n) => keepLaterEdits(n, FC.items.find((o) => o.id === n.id), sent)); FC.dirty = r.dirty; FC.removed = [];
     setApplyEnabled();
     if (repaint) paintFinal(); else renderItems();
     status("保存しました");
   } catch (e) { if (!(e instanceof Stale)) status("保存できません: " + e.message, true); throw e; }
 }
 
+function keepLaterEdits(n, o, sent) {
+  if (!o || !(o.edited > sent)) return n;
+  const rewrite = n.rewrite && o.rewrite ? { ...n.rewrite, result: o.rewrite.result, source: o.rewrite.source } : n.rewrite;
+  return { ...n, decision: o.decision, note: o.note, rewrite, edited: o.edited };
+}
+
 async function applyFinal() {
   try {
-    if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
+    if (!(await flushPending())) return;
     status("反映中…");
     const a = await write(draftPath("apply"), "POST", {});
     FC.items = a.review.items; FC.dirty = a.review.dirty;
