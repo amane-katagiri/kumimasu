@@ -115,4 +115,7 @@ def auto_review(wd: WorkDir, provider: Provider, rewriter: Callable[[], Provider
                 decided[iid] = "delete" if row.get("decision") == "delete" else "keep"
     if decided:
         ops.decide(wd, base, {"items": [{"id": k, "decision": v} for k, v in decided.items()]}, SOURCE)
-    return ops.confirm(wd, SOURCE, note="auto: 検出された文を残す／削るだけで決め、書き直しはしていない", rewriter=rewriter)
+    pre = ops.Prefetch(wd)
+    wrapped = (lambda: pre.provider(rewriter)) if rewriter else None
+    return pre.run(lambda: ops.confirm(wd, SOURCE, note="auto: 検出された文を残す／削るだけで決め、書き直しはしていない",
+                                       rewriter=wrapped))

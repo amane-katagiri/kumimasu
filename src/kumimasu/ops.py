@@ -8,6 +8,8 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import cached_property
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
@@ -25,6 +27,7 @@ from .errors import StepError
 from .figures import figure_markers
 from .files import PRIVATE_FILE, append_jsonl, atomic_write, read_jsonl
 from .land import propose_followups, with_answer
+from .llm import forget
 from .model import (
     LANDS,
     LENGTH_MAX,
@@ -70,7 +73,8 @@ WHO = {"human-ui": "human", "agent-chat": "human", "auto": "auto", "agent": "age
 STAGE_LABEL = {"interview": "インタビュー", "design": "設計", "drafting": "下書き", "review": "最終チェック", "done": "完了"}
 LOCK = threading.RLock()
 LOCK_FILE = ".lock"
-_held = False
+_held: set[Path] = set()
+STALLS_MAX = 3
 
 
 class StageError(StepError):
@@ -79,20 +83,91 @@ class StageError(StepError):
 
 @contextmanager
 def locked(wd: WorkDir) -> Iterator[None]:
-    global _held
+    root = wd.root.resolve()
     with LOCK:
         # flock from a second descriptor would block this same process, so nested callers reuse the outer lock.
-        if _held or fcntl is None:
+        if root in _held or fcntl is None:
             yield
             return
-        fd = os.open(wd.root / LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, PRIVATE_FILE)
+        fd = os.open(root / LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, PRIVATE_FILE)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            _held = True
+            _held.add(root)
             yield
         finally:
-            _held = False
+            _held.discard(root)
             os.close(fd)
+
+
+class Deferred(Exception):
+    def __init__(self, fetch: Callable[[], None]) -> None:
+        super().__init__("LLM の呼び出しをロックの外へ回します")
+        self.fetch = fetch
+
+
+class Prefetched:
+    def __init__(self, make: Callable[[], Provider], run: Prefetch) -> None:
+        self.make = make
+        self.run = run
+
+    @cached_property
+    def inner(self) -> Provider:
+        return self.make()
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    @property
+    def model(self) -> str:
+        return self.inner.model
+
+    def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
+        key = (prompt, system, json.dumps(json_schema, sort_keys=True))
+        if key not in self.run.answers:
+            def fetch() -> None:
+                self.run.answers[key] = self.inner.complete(prompt, system=system, json_schema=json_schema)
+            raise Deferred(fetch)
+        self.run.used.add(key)
+        return self.run.answers[key]
+
+    def forget(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> None:
+        forget(self.inner, prompt, json_schema, system)
+
+
+class Prefetch:
+    """An LLM call can take minutes, so it is made outside the lock: the call raises Deferred, and once the answer is in,
+    the whole locked step runs again on the files as they are now and finds it."""
+
+    def __init__(self, wd: WorkDir) -> None:
+        self.wd = wd
+        self.answers: dict[tuple, str] = {}
+        self.used: set[tuple] = set()
+
+    def provider(self, make: Callable[[], Provider]) -> Provider:
+        return Prefetched(make, self)
+
+    def run[T](self, step: Callable[[], T]) -> T:
+        stalls, last = 0, -1
+        while True:
+            self.used = set()
+            with locked(self.wd):
+                try:
+                    return step()
+                except Deferred as d:
+                    fetch = d.fetch
+            if len(self.used) <= last:
+                stalls += 1
+                if stalls > STALLS_MAX:
+                    raise StepError("LLM への依頼が、やり直すたびに変わります（ほかの所で変更が続いています）。もう一度試してください")
+            last = len(self.used)
+            fetch()
+
+
+def outside[T](wd: WorkDir, step: Callable[..., T], *makes: Callable[[], Provider]) -> T:
+    pre = Prefetch(wd)
+    providers = [pre.provider(m) for m in makes]
+    return pre.run(lambda: step(*providers))
 
 
 def stage(wd: WorkDir) -> str:

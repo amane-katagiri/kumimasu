@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -22,8 +24,10 @@ from conftest import (
 from kumimasu import cli_common as cc
 from kumimasu import ops
 from kumimasu.check import check, map_prompt, surface_checks
-from kumimasu.design import design, land_workdir
+from kumimasu.cli import _designing
+from kumimasu.design import design, land_workdir, review_conflicts
 from kumimasu.draft import draft, draft_prompt, read_used
+from kumimasu.errors import StepError
 from kumimasu.infounits import info_units
 from kumimasu.interview import interview
 from kumimasu.land import (
@@ -349,3 +353,56 @@ def test_followup_page_and_stage(tmp_path, wd):
     with pytest.raises(ops.StageError):
         ops.followup(wd, p, "agent")
 
+
+
+def test_followup_page_makes_one_call(wd):
+    _followup_design(wd)
+    p = scripted()
+    with serving(wd, judge=lambda: p) as c:
+        code, _ = c.post("/api/followup")
+    assert code == 200 and len(p.calls) == 1
+
+
+def test_design_commands_call_outside_the_lock_and_keep_page_edits(wd):
+    started, go = threading.Event(), threading.Event()
+    inner = scripted()
+
+    def slow(prompt: str) -> str:
+        started.set()
+        go.wait(5)
+        return inner.complete(prompt)
+
+    p = FakeProvider(slow)
+    out = {}
+    cli = threading.Thread(target=lambda: out.update(d=_designing(wd, "設計の見直し", lambda a, b: review_conflicts(wd, a, b),
+                                                                  lambda: p, lambda: p)))
+    cli.start()
+    assert started.wait(5)
+    page = threading.Thread(target=lambda: ops.update_design(wd, {"purpose": "途中で直した"}, "human-ui"))
+    page.start()
+    page.join(5)
+    assert not page.is_alive()
+    go.set()
+    cli.join(10)
+    assert out["d"].purpose == "途中で直した" and wd.design().purpose == "途中で直した"
+
+
+def test_prefetch_gives_up_when_the_prompt_keeps_changing(wd):
+    p = FakeProvider(lambda prompt: "{}")
+    runs = iter(range(100))
+    with pytest.raises(StepError, match="やり直すたびに変わります"):
+        ops.outside(wd, lambda q: q.complete(f"prompt {next(runs)}"), lambda: p)
+    assert len(p.calls) == ops.STALLS_MAX + 1
+
+
+@pytest.mark.skipif(ops.fcntl is None, reason="no flock")
+def test_nested_lock_on_another_workdir_takes_its_own_flock(wd, tmp_path):
+    other = WorkDir(tmp_path / "other")
+    other.root.mkdir()
+    probe = ("import fcntl, os, sys\n"
+             "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\n"
+             "try:\n    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept OSError:\n    print('busy')\n")
+    with ops.locked(wd), ops.locked(other):
+        res = subprocess.run([sys.executable, "-c", probe, str(other.root / ops.LOCK_FILE)],
+                             capture_output=True, text=True, check=True)
+    assert res.stdout.strip() == "busy"

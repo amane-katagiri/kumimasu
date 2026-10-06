@@ -62,9 +62,9 @@ def extract_json(text: str) -> Any:
     raise ValueError(f"JSON が閉じていません: {text[:120]!r}")
 
 
-def forget(provider: Provider, prompt: str, schema: dict | None = None) -> None:
+def forget(provider: Provider, prompt: str, schema: dict | None = None, system: str | None = None) -> None:
     if (drop := getattr(provider, "forget", None)) is not None:
-        drop(prompt, json_schema=schema)
+        drop(prompt, system=system, json_schema=schema)
 
 
 def ask_json(provider: Provider, prompt: str, schema: dict) -> dict:

@@ -4,6 +4,7 @@ import re
 import statistics
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -235,24 +236,35 @@ def digest(wd: WorkDir, provider: Provider, force: bool = False) -> DigestResult
     raw = wd.raw_units() or [plain(u) for u in wd.material_units()]
     prose_files = {n for n in p.materials if Path(n).suffix.lower() in PROSE_SUFFIXES}
     res = digest_units(raw, prose_files, provider)
-    if not wd.raw_units_file.exists():
-        wd.save_raw_units(raw)
-    if wd.interview_file.exists():
-        wd.interview_file.replace(wd.root / BEFORE_DIGEST)
-    wd.save_units(res.units)
-    state = p.digest.model_copy(update={"done_at": datetime.now(UTC).isoformat(timespec="seconds"),
-                                        "units_before": res.before, "units_after": len(res.units), "calls": res.calls})
-    wd.save_project(wd.project().model_copy(update={"digest": state}))
+    with locked(wd):
+        if not wd.raw_units_file.exists():
+            wd.save_raw_units(raw)
+        if wd.interview_file.exists():
+            wd.interview_file.replace(wd.root / BEFORE_DIGEST)
+        wd.save_units(res.units)
+        p = wd.project()
+        state = p.digest.model_copy(update={"done_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                                            "units_before": res.before, "units_after": len(res.units),
+                                            "calls": res.calls})
+        wd.save_project(p.model_copy(update={"digest": state}))
     return res
 
 
 def reassess(wd: WorkDir) -> DigestState:
-    p = wd.project()
-    units = wd.raw_units() or wd.material_units()
-    fresh = assess(wd.material_dir, p.materials, units)
-    state = p.digest.model_copy(update={"recommended": fresh.recommended, "reasons": fresh.reasons, "stats": fresh.stats})
-    wd.save_project(p.model_copy(update={"digest": state}))
-    return state
+    with locked(wd):
+        p = wd.project()
+        units = wd.raw_units() or wd.material_units()
+        fresh = assess(wd.material_dir, p.materials, units)
+        state = p.digest.model_copy(update={"recommended": fresh.recommended, "reasons": fresh.reasons,
+                                            "stats": fresh.stats})
+        wd.save_project(p.model_copy(update={"digest": state}))
+        return state
+
+
+def locked(wd: WorkDir) -> AbstractContextManager[None]:
+    # ops imports workdir, which imports this module.
+    from .ops import locked
+    return locked(wd)
 
 
 def digest_lines(state: DigestState) -> list[str]:

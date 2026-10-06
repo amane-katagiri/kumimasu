@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -52,6 +53,9 @@ from .server import WriteApp
 from .server import serve as run_server
 from .terms import material_load, term_states
 from .workdir import WorkDir, check_draft_name, init_workdir
+
+if TYPE_CHECKING:
+    from .llm import Provider
 
 
 @app.command()
@@ -147,6 +151,13 @@ def _echo_design_notes(d: Design, units: list) -> None:
         typer.echo(line)
 
 
+def _designing(wd: WorkDir, action: str, step: Callable[..., Design], *makes: Callable[[], Provider]) -> Design:
+    def checked(*providers: Provider) -> Design:
+        ops.require_stage(wd, "design", action=action)
+        return step(*providers)
+    return ops.outside(wd, checked, *makes)
+
+
 @app.command()
 def design(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None,
            overwrite: Annotated[bool, typer.Option("--overwrite")] = False) -> None:
@@ -155,8 +166,8 @@ def design(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None,
     wd = cc.workdir(path, "design", action="設計の提案")
     cfg = cc.config(path)
     with errors():
-        d = run_design(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge), cc.design_defaults(cfg),
-                       overwrite)
+        d = _designing(wd, "設計の提案", lambda p, j: run_design(wd, p, j, cc.design_defaults(cfg), overwrite),
+                       lambda: cc.llm(cfg, "designer", provider), lambda: cc.llm(cfg, "judge", judge))
     n = {u: sum(x.use == u for x in d.units) for u in USES}
     typer.echo(f"wrote {wd.design_file}: deep {n['deep']}, mention {n['mention']}, drop {n['drop']}")
     for t in d.takeaways:
@@ -170,8 +181,9 @@ def noise(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) ->
     wd = cc.workdir(path, "design", action="前提と脱線の提案")
     cfg = cc.config(path)
     with errors():
-        d = noise_workdir(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge),
-                          cfg.get("defaults.noise.skip_max"), cfg.get("defaults.noise.aside_max"))
+        d = _designing(wd, "前提と脱線の提案", lambda p, j: noise_workdir(wd, p, j, cfg.get("defaults.noise.skip_max"),
+                                                                    cfg.get("defaults.noise.aside_max")),
+                       lambda: cc.llm(cfg, "designer", provider), lambda: cc.llm(cfg, "judge", judge))
     _echo_design_notes(d, wd.units())
 
 
@@ -182,7 +194,7 @@ def land(path: DirArg, judge: JudgeOpt = None) -> None:
     wd = cc.workdir(path, "design", action="結果の着地の提案")
     cfg = cc.config(path)
     with errors():
-        d = land_workdir(wd, cc.llm(cfg, "judge", judge))
+        d = _designing(wd, "結果の着地の提案", lambda j: land_workdir(wd, j), lambda: cc.llm(cfg, "judge", judge))
     for line in show.note_lines(note_items(d, wd.units()), d.note_limit):
         typer.echo(line)
 
@@ -194,7 +206,7 @@ def followup(path: DirArg, judge: JudgeOpt = None) -> None:
     wd = cc.workdir(path, "design", action="一言の聞き返し")
     cfg = cc.config(path)
     with errors():
-        d = ops.followup(wd, cc.llm(cfg, "judge", judge), "agent")
+        d = ops.outside(wd, lambda j: ops.followup(wd, j, "agent"), lambda: cc.llm(cfg, "judge", judge))
     for line in show.note_lines(note_items(d, wd.units()), d.note_limit):
         typer.echo(line)
 
@@ -206,7 +218,8 @@ def review(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) -
     wd = cc.workdir(path, "design", action="設計の見直し")
     cfg = cc.config(path)
     with errors():
-        d = review_conflicts(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge))
+        d = _designing(wd, "設計の見直し", lambda p, j: review_conflicts(wd, p, j),
+                       lambda: cc.llm(cfg, "designer", provider), lambda: cc.llm(cfg, "judge", judge))
     _echo_design_notes(d, wd.units())
 
 
@@ -368,8 +381,8 @@ def apply(path: DirArg, draft_name: DraftOpt = None,
         unknown = set(regen) - {i.id for i in ctx.review.items}
         if unknown:
             raise ValueError(f"知らない項目です: {', '.join(sorted(unknown))}")
-        res = ops.apply(wd, name, cc.llm(cc.config(path), "rewriter", provider)
-                        if ctx.needs_rewrite_call(regen) else None, cc.source(source), regen)
+        res = ops.outside(wd, lambda r: ops.apply(wd, name, r, cc.source(source), regen),
+                          lambda: cc.llm(cc.config(path), "rewriter", provider))
     typer.echo(f"wrote {wd.root / res.out}: deleted {res.deleted}, rewritten {res.rewritten} (reused {res.reused}), "
                f"skipped {len(res.skipped)}, stale {len(res.stale)}, calls {res.calls}")
     for iid in res.stale:

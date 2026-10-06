@@ -19,7 +19,7 @@ from kumimasu.errors import LLMError
 from kumimasu.infounits import info_units
 from kumimasu.keep import KeepStore, text_hash
 from kumimasu.llm import CachedProvider, CountingProvider, FakeProvider, ask_json
-from kumimasu.model import Project
+from kumimasu.model import Design, Project
 from kumimasu.polish import find_flags
 from kumimasu.render import render
 from kumimasu.review import (
@@ -535,3 +535,15 @@ def test_bad_replies_are_not_served_from_the_cache(wd, tmp_path):
         ask_json(CountingProvider(cached), "p", {})
     assert ask_json(cached, "p", {}) == {"items": []} and cached.misses == 5
     assert ask_json(cached, "p", {}) == {"items": []} and cached.hits == 1
+
+
+def test_server_confirm_rewrites_a_pending_item_with_one_call(wd):
+    standard_report(wd)
+    wd.save_design(Design())
+    glue = next(i for i in load_review(wd, "draft.md").items if i.kind == "glue")
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    rewriter = FakeProvider(lambda prompt: json.dumps({"items": [{"id": glue.id, "replacement": "縦書きで読める。"}]}))
+    with serving(wd, lambda: rewriter) as c:
+        code, body = c.post("/api/confirm", {"note": ""})
+    assert code == 200 and body["handoff"]["stage"] == "review" and len(rewriter.calls) == 1
+    assert "縦書きで読める。" in (wd.root / "draft.final.md").read_text(encoding="utf-8")

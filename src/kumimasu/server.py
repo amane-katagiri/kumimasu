@@ -6,7 +6,6 @@ import secrets
 import threading
 import traceback
 from collections.abc import Callable
-from functools import cached_property
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import TYPE_CHECKING
@@ -22,7 +21,6 @@ from .errors import LLMError, StepError
 from .figures import figure_markers
 from .interview import SEARCHABLE_LABEL
 from .land import NOTE_QUESTION
-from .llm import forget
 from .model import REGISTER_LABEL, USE_LABEL
 from .render import render
 from .review import (
@@ -89,41 +87,6 @@ class Stale(HttpError):
         super().__init__(409, "ほかの所（エージェントや別のタブ）で先に変更されています")
 
 
-class Deferred(Exception):
-    def __init__(self, fetch: Callable[[], None]) -> None:
-        super().__init__("LLM の呼び出しをロックの外へ回します")
-        self.fetch = fetch
-
-
-class Prefetched:
-    def __init__(self, make: Callable[[], Provider], answers: dict) -> None:
-        self.make = make
-        self.answers = answers
-
-    @cached_property
-    def inner(self) -> Provider:
-        return self.make()
-
-    @property
-    def name(self) -> str:
-        return self.inner.name
-
-    @property
-    def model(self) -> str:
-        return self.inner.model
-
-    def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
-        key = (prompt, system, json.dumps(json_schema, sort_keys=True))
-        if key not in self.answers:
-            def fetch() -> None:
-                self.answers[key] = self.inner.complete(prompt, system=system, json_schema=json_schema)
-            raise Deferred(fetch)
-        return self.answers[key]
-
-    def forget(self, prompt: str, json_schema: dict | None = None) -> None:
-        forget(self.inner, prompt, json_schema)
-
-
 def text_field(body: dict, key: str) -> str:
     value = body.get(key, "")
     if not isinstance(value, str):
@@ -141,21 +104,16 @@ class WriteApp:
         self.local = threading.local()
 
     def write(self, sent: str, call: Callable[[], dict]) -> dict:
-        # An LLM call can take minutes, so it is made outside the lock (Deferred) and call is run again with the
-        # answer; the version check on the retry refuses it if someone else wrote meanwhile.
-        self.local.answers = {}
-        while True:
-            with ops.locked(self.wd):
-                if sent != ops.version(self.wd):
-                    raise Stale
-                try:
-                    return call()
-                except Deferred as d:
-                    fetch = d.fetch
-            fetch()
+        pre = self.local.pre = ops.Prefetch(self.wd)
+
+        def step() -> dict:
+            if sent != ops.version(self.wd):
+                raise Stale
+            return call()
+        return pre.run(step)
 
     def provider(self, make: Callable[[], Provider]) -> Provider:
-        return Prefetched(make, self.local.answers)
+        return self.local.pre.provider(make)
 
     def drafts(self) -> dict:
         return {"drafts": [{"name": b, "final": final_name(b) if self.wd.is_plain_file(final_name(b)) else None}
@@ -194,21 +152,23 @@ class WriteApp:
         name = self.draft_name(name)
         return download_name(self.wd, name), self.wd.read(self.final_file(name)).encode()
 
-    def _review(self, ctx: ReviewContext, with_html: bool = True) -> dict:
+    def _review(self, ctx: ReviewContext, version: str, with_html: bool = True) -> dict:
         checked = bool(ctx.review.items) or any((self.wd.root / f"{check_stem(ctx.draft, s)}.json").exists()
                                                for s in (False, True))
         return ({"html": render(ctx.src)[0]} if with_html else {}) | {
             "draft": ctx.draft, "items": [i.model_dump() for i in ctx.review.items], "dirty": ctx.needs_apply(),
-            "used": read_used(self.wd, ctx.draft), "checked": checked, "version": ops.version(self.wd),
+            "used": read_used(self.wd, ctx.draft), "checked": checked, "version": version,
             "figures": figure_markers(ctx.src)}
 
     def review(self, name: str) -> dict:
-        return self._review(ReviewContext.load(self.wd, self.draft_name(name)))
+        name = self.draft_name(name)
+        v = ops.version(self.wd)
+        return self._review(ReviewContext.load(self.wd, name), v)
 
     def save_review(self, name: str, body: dict) -> dict:
         name = self.draft_name(name)
         rev = ops.decide(self.wd, name, body, SOURCE)
-        return self._review(ReviewContext(self.wd, name, self.wd.read(name), rev), with_html=False)
+        return self._review(ReviewContext(self.wd, name, self.wd.read(name), rev), ops.version(self.wd), with_html=False)
 
     def apply(self, name: str) -> dict:
         name = self.draft_name(name)
@@ -216,7 +176,7 @@ class WriteApp:
         res = ops.apply(self.wd, name, self.provider(self.rewriter) if ctx.needs_rewrite_call() and self.rewriter else None,
                         SOURCE, ctx=ctx)
         after = ReviewContext.load(self.wd, name)
-        return {"result": res.model_dump(), "review": self._review(after, with_html=False), "final": self._final(after)}
+        return {"result": res.model_dump(), "review": self._review(after, ops.version(self.wd), with_html=False), "final": self._final(after)}
 
     def confirm(self, body: dict) -> dict:
         rewriter = self.rewriter
@@ -233,10 +193,11 @@ class WriteApp:
 
     def state(self) -> dict:
         wd = self.wd
+        v = ops.version(wd)
         units = wd.units()
         wanted = {x for u in units for x in u.from_units}
         design = sync_design(wd.design(), units) if wd.design_file.exists() else None
-        return {"project": wd.project().model_dump(), "version": ops.version(wd), "stage": ops.stage_info(wd),
+        return {"project": wd.project().model_dump(), "version": v, "stage": ops.stage_info(wd),
                 "poll_seconds": self.poll_seconds, "labels": LABELS,
                 "units": [u.model_dump() | {"firsthand": u.firsthand} for u in units],
                 "originals": {u.id: u.model_dump() for u in wd.raw_units() if u.id in wanted} if wanted else {},

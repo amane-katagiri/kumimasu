@@ -228,7 +228,8 @@ def confirm(path: DirArg, note: Annotated[str, typer.Option("--note", help="Inst
     src = "agent" if agent else cc.source(source)
     cfg = cc.config(path)
     with errors():
-        h = ops.confirm(wd, src, note, lambda: cc.llm(cfg, "rewriter", rewriter), draft_name or "")
+        h = ops.outside(wd, lambda r: ops.confirm(wd, src, note, lambda: r, draft_name or ""),
+                        lambda: cc.llm(cfg, "rewriter", rewriter))
     typer.echo(json.dumps(h, ensure_ascii=False, indent=1))
 
 
