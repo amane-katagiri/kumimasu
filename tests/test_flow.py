@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import socket
 import threading
 import time
 
@@ -23,6 +24,7 @@ from typer.testing import CliRunner
 from kumimasu import auto as stand_in
 from kumimasu import cli_common as cc
 from kumimasu import ops
+from kumimasu import server as server_mod
 from kumimasu.check import Check, CheckReport
 from kumimasu.cli import app
 from kumimasu.design import design
@@ -380,12 +382,61 @@ def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):
         assert c.request("/api/confirm", "POST", raw=b"{}", headers={"Content-Length": "-1"})[0] == 400
         assert c.request("/api/confirm", "POST", raw=b"{}", headers={"Content-Length": str(2 * 1024 * 1024 + 1)})[0] == 413
         assert ops.stage(wd) == "design"
-        code, page, headers = c.request("/", token=None)
+        code, page, headers = c.page()
         assert code == 200 and "test-token" in page and headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
         assert headers["X-Content-Type-Options"] == "nosniff" and headers["Referrer-Policy"] == "no-referrer"
         code, body = c.get("/api/review/draft.md")
         assert code == 404 and str(wd.root) not in json.dumps(body, ensure_ascii=False)
+
+
+def test_server_page_needs_the_url_token_and_runs_only_its_nonce_script(wd):
+    with serving(wd) as c:
+        for path in ("/", "/index.html", "/?token=wrong", "/?token="):
+            code, body, _ = c.request(path, token=None)
+            assert code == 403 and "test-token" not in json.dumps(body)
+        assert c.request("/", headers={"X-Kumimasu-Token": "test-token"})[0] == 403
+        code, page, headers = c.page()
+        csp = headers["Content-Security-Policy"]
+        nonce = re.search(r"script-src 'nonce-([\w-]+)'", csp)[1]
+        assert code == 200 and f'<script nonce="{nonce}">' in page and "unsafe-inline" not in csp.split("style-src")[0]
+        assert "base-uri 'none'" in csp and "form-action 'none'" in csp
+        assert nonce not in c.page()[1]
+
+
+def test_server_refuses_cross_site_fetches_even_with_the_token(wd):
+    with serving(wd) as c:
+        for site in ("cross-site", "same-site"):
+            assert c.get("/api/state", headers={"Sec-Fetch-Site": site})[0] == 403
+            assert c.post("/api/confirm", {"note": "x"}, headers={"Sec-Fetch-Site": site})[0] == 403
+        assert c.get("/api/state", headers={"Sec-Fetch-Site": "same-origin"})[0] == 200
+        for path in ("/api/version", "/api/drafts", "/api/download/draft.md", "/api/final/draft.md"):
+            assert c.get(path, token=None)[0] == 403
+        assert c.request("/api/version", token=None, headers={"If-None-Match": '"x"'})[0] == 403
+        assert c.get("/api/state", token="トークン".encode().decode("latin-1"))[0] == 403
+        assert ops.stage(wd) == "interview"
+
+
+def test_server_drops_idle_connections(wd, monkeypatch):
+    monkeypatch.setattr(server_mod, "REQUEST_TIMEOUT", 0.3)
+    with serving(wd) as c:
+        host, port = c.base.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=5) as sock:
+            sock.sendall(b"GET /api/state HTTP/1.1\r\nHost: ")
+            start = time.monotonic()
+            assert sock.recv(1024) == b"" and time.monotonic() - start < 4
+
+
+def test_server_rejects_ill_typed_bodies_without_writing(wd):
+    p = scripted()
+    to_design(wd, p)
+    before = wd.design_file.read_text(encoding="utf-8")
+    with serving(wd) as c:
+        for body in ({"takeaways": "abc"}, {"units": ["m1"]}, {"notes": {"m1": ["x"]}}, {"purpose": 1},
+                     {"toggle_skip": {"on": True}}, {"surprise": 1}, {"target_length": "many"}):
+            code, err = c.put("/api/design", body)
+            assert code == 400 and "error" in err, body
+    assert wd.design_file.read_text(encoding="utf-8") == before
 
 
 def test_cli_auto_prints_warning(wd, monkeypatch):

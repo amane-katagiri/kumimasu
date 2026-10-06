@@ -7,7 +7,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import TYPE_CHECKING
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from pydantic import ValidationError
 
@@ -29,10 +29,10 @@ from .review import (
     download_name,
     final_changes,
     final_name,
-    is_final,
+    require_base,
 )
 from .terms import material_load, term_states
-from .workdir import DRAFT_NAME, WorkDir
+from .workdir import WorkDir
 
 if TYPE_CHECKING:
     from .llm import Provider
@@ -42,15 +42,29 @@ SOURCE = "human-ui"
 MAX_BODY = 2 * 1024 * 1024
 TOKEN_HEADER = "X-Kumimasu-Token"
 TOKEN_SLOT = b"{{KUMIMASU_TOKEN}}"
+NONCE_SLOT = b"{{KUMIMASU_NONCE}}"
+REQUEST_TIMEOUT = 30
 SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
-    "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                               "style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
+PAGE_CSP = ("default-src 'self'; script-src 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 LABELS = {"searchable": SEARCHABLE_LABEL, "use": USE_LABEL, "decision": DECISION_LABEL, "kind": ITEM_KIND_LABEL,
           "register": REGISTER_LABEL, "human_stages": list(ops.HUMAN_STAGES), "note_question": NOTE_QUESTION}
+
+
+class HttpError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class NotFound(HttpError):
+    def __init__(self) -> None:
+        super().__init__(404, "見つかりません")
 
 
 class WriteApp:
@@ -66,9 +80,19 @@ class WriteApp:
                            for b in base_drafts(self.wd)]}
 
     def draft_name(self, name: str) -> str:
-        if not DRAFT_NAME.match(name) or name.endswith(".prompt.md") or is_final(name) or not self.wd.is_plain_file(name):
-            raise KeyError(name)
+        try:
+            require_base(name)
+        except ValueError:
+            raise NotFound from None
+        if not self.wd.is_plain_file(name):
+            raise NotFound
         return name
+
+    def final_file(self, name: str) -> str:
+        out = final_name(name)
+        if not self.wd.is_plain_file(out):
+            raise NotFound
+        return out
 
     def public(self, message: str) -> str:
         for root in {str(self.wd.root.resolve()), str(self.wd.root)}:
@@ -76,9 +100,7 @@ class WriteApp:
         return message
 
     def _final(self, ctx: ReviewContext) -> dict:
-        out = final_name(ctx.draft)
-        if not self.wd.is_plain_file(out):
-            raise KeyError(out)
+        out = self.final_file(ctx.draft)
         text = self.wd.read(out)
         return {"draft": ctx.draft, "final": out, "markdown": text, "html": render(text)[0],
                 "changes": final_changes(ctx.src, text, ctx.review)}
@@ -88,10 +110,7 @@ class WriteApp:
 
     def download(self, name: str) -> tuple[str, bytes]:
         name = self.draft_name(name)
-        out = final_name(name)
-        if not self.wd.is_plain_file(out):
-            raise KeyError(out)
-        return download_name(self.wd, name), self.wd.read(out).encode()
+        return download_name(self.wd, name), self.wd.read(self.final_file(name)).encode()
 
     def _review(self, ctx: ReviewContext, with_html: bool = True) -> dict:
         checked = bool(ctx.review.items) or any((self.wd.root / f"{check_stem(ctx.draft, s)}.json").exists()
@@ -167,14 +186,7 @@ class WriteApp:
         return self.state()
 
 
-class HttpError(Exception):
-    def __init__(self, code: int, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
 ERRORS: tuple[tuple[tuple[type[Exception], ...], int], ...] = (
-    ((KeyError,), 404),
     ((StepError,), 409),
     ((ValueError, TypeError, ValidationError, LLMError), 400),
 )
@@ -182,6 +194,7 @@ ERRORS: tuple[tuple[tuple[type[Exception], ...], int], ...] = (
 
 def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
     page = resources.files("kumimasu").joinpath("index.html").read_bytes().replace(TOKEN_SLOT, token.encode())
+    token_bytes = token.encode()
     exact = {("GET", "/api/drafts"): lambda body: app.drafts(),
              ("GET", "/api/state"): lambda body: app.state(),
              ("POST", "/api/confirm"): app.confirm,
@@ -195,6 +208,8 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
              ("POST", "apply"): lambda name, body: app.apply(name)}
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = REQUEST_TIMEOUT
+
         def log_message(self, fmt, *args):
             pass
 
@@ -212,7 +227,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
         def _json(self, data, code: int = 200, headers: dict | None = None) -> None:
             self._send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8", headers)
 
-        def _check(self, path: str) -> None:
+        def _check(self, path: str, query: str) -> None:
             port = self.server.server_address[1]
             hosts = {f"{HOST}:{port}", f"localhost:{port}"}
             if self.headers.get("Host") not in hosts:
@@ -220,8 +235,13 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
             origin = self.headers.get("Origin")
             if origin is not None and origin not in {f"http://{h}" for h in hosts}:
                 raise HttpError(403, "別のオリジンからの要求は受けません")
-            if path.startswith("/api/") and not secrets.compare_digest(self.headers.get(TOKEN_HEADER, ""), token):
-                raise HttpError(403, "トークンがありません")
+            if path.startswith("/api/"):
+                if self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
+                    raise HttpError(403, "別のオリジンからの要求は受けません")
+                if not secrets.compare_digest(self.headers.get(TOKEN_HEADER, "").encode(), token_bytes):
+                    raise HttpError(403, "トークンがありません")
+            elif not secrets.compare_digest(parse_qs(query).get("token", [""])[0].encode(), token_bytes):
+                raise HttpError(403, "kumimasu serve が表示した URL（token 付き）を開いてください")
 
         def _body(self) -> dict:
             if not (self.headers.get("Content-Type") or "").startswith("application/json"):
@@ -244,7 +264,9 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
 
         def _route(self, method: str, path: str) -> None:
             if method == "GET" and path in ("/", "/index.html"):
-                self._send(200, page, "text/html; charset=utf-8")
+                nonce = secrets.token_urlsafe(16)
+                self._send(200, page.replace(NONCE_SLOT, nonce.encode()), "text/html; charset=utf-8",
+                           {"Content-Security-Policy": PAGE_CSP.format(nonce=nonce)})
                 return
             if method == "GET" and path == "/api/version":
                 v = app.version()
@@ -266,19 +288,18 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
             elif len(parts) == 3 and parts[0] == "api" and (named_handler := named.get((method, parts[1]))) is not None:
                 self._json(named_handler(parts[2], body))
             else:
-                raise KeyError(path)
+                raise NotFound
 
         def _handle(self, method: str) -> None:
-            path = urlparse(self.path).path
+            url = urlparse(self.path)
             try:
-                self._check(path)
-                self._route(method, path)
+                self._check(url.path, url.query)
+                self._route(method, url.path)
             except HttpError as e:
                 self._json({"error": str(e)}, e.code)
             except Exception as e:  # noqa: BLE001
                 code = next((c for kinds, c in ERRORS if isinstance(e, kinds)), 500)
-                message = "見つかりません" if code == 404 else app.public(str(e)) if code != 500 else "サーバーの内部エラーです"
-                self._json({"error": message}, code)
+                self._json({"error": app.public(str(e)) if code != 500 else "サーバーの内部エラーです"}, code)
 
         def do_GET(self) -> None:
             self._handle("GET")
@@ -292,15 +313,20 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def make_server(app: WriteApp, port: int, token: str | None = None) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((HOST, port), make_handler(app, token or secrets.token_urlsafe(32)))
-    server.daemon_threads = True
-    return server
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR lets another process bind the same port and take the connections.
+    allow_reuse_address = os.name != "nt"
+
+
+def make_server(app: WriteApp, port: int, token: str) -> Server:
+    return Server((HOST, port), make_handler(app, token))
 
 
 def serve(app: WriteApp, port: int) -> None:
-    server = make_server(app, port)
-    print(f"kumimasu: http://{HOST}:{server.server_address[1]}/  (Ctrl+C to stop)", flush=True)
+    token = secrets.token_urlsafe(32)
+    server = make_server(app, port, token)
+    print(f"kumimasu: http://{HOST}:{server.server_address[1]}/?token={token}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

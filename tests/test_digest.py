@@ -126,7 +126,7 @@ def test_mark_and_interview_after_digest(tmp_path, dense):
         first = state["units"][0]
         assert first["from"] == ["r1", "r2"] and first["path"].startswith("dense.md › ")
         assert set(first["from"]) <= set(state["originals"]) and state["originals"]["r1"]["text"].startswith("条件 0")
-        code, page = c.get("/")
+        code, page = c.page()[:2]
         assert "digest-note" in page and "書き直す前の単位" in page
 
 

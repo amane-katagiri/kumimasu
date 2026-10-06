@@ -8,6 +8,8 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict
+
 from .check import check_stem
 from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
 from .draft import read_used
@@ -105,48 +107,73 @@ def answer(wd: WorkDir, qid: str, text: str, source: str) -> Interview:
     return save_answers(wd, {qid: text}, source)
 
 
+class SkipToggle(BaseModel):
+    unit: str
+    on: bool = False
+    label: str = ""
+
+
+class AsideToggle(BaseModel):
+    unit: str
+    on: bool = False
+    where: str = ""
+
+
+class DesignEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    purpose: str | None = None
+    form_prefs: str | None = None
+    takeaways: list[str] | None = None
+    order: list[str] | None = None
+    avoid: list[str] | None = None
+    research: list[str] | None = None
+    forms: list[str] | None = None
+    rules: list[Rule] | None = None
+    skip: list[Skip] | None = None
+    aside: list[Aside] | None = None
+    toggle_skip: SkipToggle | None = None
+    toggle_aside: AsideToggle | None = None
+    target_length: int | None = None
+    followup_limit: int | None = None
+    note_limit: int | None = None
+    units: dict[str, str] = {}
+    explain: str | None = None
+    notes: dict[str, str] = {}
+    land: dict[str, str] = {}
+    followups: dict[str, str] = {}
+
+
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
-    """The design edits of the page, as one body: purpose, takeaways, order, avoid, rules, skip, aside, target_length,
-    units ({id: use}), explain (a term whose best dropped explanation becomes mention), land ({id: bare|author}), notes
-    ({id: one word}), note_limit, followups ({id: answer; "" skips}), followup_limit. A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides. A one word makes the
-    unit author and clearing it makes it bare; a unit that becomes mention without a land becomes bare."""
+    """The design edits of the page, as one body (DesignEdit). A unit set to a non-drop use leaves its skip; a unit set
+    to drop leaves the asides. A one word makes the unit author and clearing it makes it bare; a unit that becomes
+    mention without a land becomes bare."""
+    edit = DesignEdit.model_validate(body)
     with LOCK:
         require_stage(wd, "design", action="設計の変更")
         units = {u.id: u for u in wd.units()}
         d = sync_design(wd.design(), list(units.values()))
         before = {u.id: u.use for u in d.units}
-        upd: dict = {}
-        for key in ("purpose", "form_prefs"):
-            if key in body:
-                upd[key] = str(body[key])
+        upd: dict = {k: v for k in ("purpose", "form_prefs", "rules", "skip", "aside", "target_length")
+                     if (v := getattr(edit, k)) is not None}
         for key in ("takeaways", "order", "avoid", "research", "forms"):
-            if key in body:
-                upd[key] = [str(x).strip() for x in body[key] if str(x).strip()]
+            if (xs := getattr(edit, key)) is not None:
+                upd[key] = [x.strip() for x in xs if x.strip()]
         if len(upd.get("research", [])) > RESEARCH_MAX or any(len(x) > RESEARCH_CHARS for x in upd.get("research", [])):
             raise ValueError(f"調べることは {RESEARCH_MAX} 個まで、それぞれ {RESEARCH_CHARS} 字までです")
-        if "rules" in body:
-            upd["rules"] = [Rule.model_validate(x) for x in body["rules"]]
-        if "skip" in body:
-            upd["skip"] = [Skip.model_validate(x) for x in body["skip"]]
-        if "aside" in body:
-            upd["aside"] = [Aside.model_validate(x) for x in body["aside"]]
-        if isinstance(t := body.get("toggle_skip"), dict):
-            unit = _known_unit(units, t.get("unit"))
-            upd["skip"] = toggled_skip(d, unit.id, bool(t.get("on")), str(t.get("label") or ""), unit.text)
-        if isinstance(t := body.get("toggle_aside"), dict):
-            upd["aside"] = toggled_aside(d, _known_unit(units, t.get("unit")).id, bool(t.get("on")),
-                                         str(t.get("where") or ""))
-        if "target_length" in body:
-            upd["target_length"] = int(body["target_length"])
-        if "followup_limit" in body:
-            if int(body["followup_limit"]) < 0:
+        if (t := edit.toggle_skip) is not None:
+            unit = _known_unit(units, t.unit)
+            upd["skip"] = toggled_skip(d, unit.id, t.on, t.label, unit.text)
+        if (a := edit.toggle_aside) is not None:
+            upd["aside"] = toggled_aside(d, _known_unit(units, a.unit).id, a.on, a.where)
+        if edit.followup_limit is not None:
+            if edit.followup_limit < 0:
                 raise ValueError("followup_limit は 0 以上にしてください")
-            upd["followup_limit"] = int(body["followup_limit"])
-        if "note_limit" in body:
-            if int(body["note_limit"]) < 1:
+            upd["followup_limit"] = edit.followup_limit
+        if edit.note_limit is not None:
+            if edit.note_limit < 1:
                 raise ValueError("note_limit は 1 以上にしてください")
-            upd["note_limit"] = int(body["note_limit"])
-        uses = body.get("units") or {}
+            upd["note_limit"] = edit.note_limit
+        uses = edit.units
         if uses:
             unknown = set(uses) - {u.id for u in d.units}
             if unknown:
@@ -157,19 +184,18 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
                             else clear_promotion(u.model_copy(update={"use": uses[u.id], "why": "手で変更"}), uses[u.id])
                             for u in d.units]
         d = d.model_copy(update=upd)
-        if "explain" in body:
-            d = explain_term(d, str(body["explain"]))
+        if edit.explain is not None:
+            d = explain_term(d, edit.explain)
         d = d.model_copy(update={
             "skip": [x.model_copy(update={"units": [i for i in x.units if uses.get(i, "drop") == "drop"]}) for x in d.skip],
             "aside": [a for a in d.aside if uses.get(a.id) != "drop"]})
-        d = with_followups(with_land(apply_noise(d), body.get("notes") or {}, body.get("land") or {}, before),
-                           body.get("followups") or {})
+        d = with_followups(with_land(apply_noise(d), edit.notes, edit.land, before), edit.followups)
         wd.save_design(d)
         record(wd, source, "design", keys=sorted(body))
         return d
 
 
-def with_land(d: Design, notes: dict, lands: dict, before: dict[str, str]) -> Design:
+def with_land(d: Design, notes: dict[str, str], lands: dict[str, str], before: dict[str, str]) -> Design:
     ids = set(d.unit_ids())
     unknown = (set(notes) | set(lands)) - ids
     if unknown:
@@ -179,7 +205,7 @@ def with_land(d: Design, notes: dict, lands: dict, before: dict[str, str]) -> De
     aside = d.aside_ids()
     out = []
     for u in d.units:
-        if u.id in notes and (text := str(notes[u.id]).strip()) != u.note:
+        if u.id in notes and (text := notes[u.id].strip()) != u.note:
             if text and u.use == "drop":
                 raise ValueError(f"{u.id} は書かない単位なので、一言を付けられません")
             u = u.model_copy(update={"note": text, "land": "author" if text else "bare", "followup": "",
@@ -196,7 +222,7 @@ def with_land(d: Design, notes: dict, lands: dict, before: dict[str, str]) -> De
     return d.model_copy(update={"units": out})
 
 
-def with_followups(d: Design, answers: dict) -> Design:
+def with_followups(d: Design, answers: dict[str, str]) -> Design:
     asked = {u.id for u in d.units if u.followup_state == "asked"}
     unknown = set(answers) - asked
     if unknown:
@@ -204,7 +230,7 @@ def with_followups(d: Design, answers: dict) -> Design:
     out = []
     for u in d.units:
         if u.id in answers:
-            text = str(answers[u.id]).strip()
+            text = answers[u.id].strip()
             u = u.model_copy(update={"note": with_answer(u.note, text), "followup_state": "answered"} if text
                              else {"followup_state": "skipped"})
         out.append(u)

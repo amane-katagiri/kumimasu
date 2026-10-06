@@ -53,6 +53,9 @@ class Client:
     def get(self, path: str, **kw):
         return self.request(path, **kw)[:2]
 
+    def page(self, **kw):
+        return self.request(f"/?token={TOKEN}", token=None, **kw)
+
     def put(self, path: str, body, **kw):
         return self.request(path, "PUT", body, **kw)[:2]
 

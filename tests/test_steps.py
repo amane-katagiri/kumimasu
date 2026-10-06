@@ -519,7 +519,7 @@ def test_server_state_answers_and_design(wd):
     mark(wd, p, p)
     interview(wd, p, always_ask())
     with serving(wd) as c:
-        code, page = c.get("/")
+        code, page = c.page()[:2]
         assert code == 200 and "インタビュー" in page
         code, st = c.get("/api/state")
         assert st["design"] is None and st["interview"]["questions"][0]["id"] == "q1"
@@ -544,7 +544,7 @@ def test_server_state_answers_and_design(wd):
         st = body["design"]["rules"]
         assert code == 200 and st[0]["on"] is False and st[-1] == {"text": "足したルール", "on": True}
         assert wd.design().rules[0].on is False and len(wd.design().rules) == len(rules) + 1
-        assert "書き方のルール" in c.get("/")[1]
+        assert "書き方のルール" in c.page()[:2][1]
         code, _ = c.put("/api/design", {"skip": [{"label": "命名規則", "units": ["m6"]}], "aside": [{"id": "m8", "where": "最初"}]})
         d = wd.design()
         assert code == 200 and d.use_of("m6") == "drop" and d.use_of("m8") == "mention"

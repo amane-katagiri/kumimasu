@@ -230,7 +230,19 @@ def test_server_final_check_round_trip(wd):
             assert c.get(f"/api/review/{bad}")[0] == 404 and c.post(f"/api/apply/{bad}")[0] == 404
         assert c.get("/api/review/draft.prompt.md")[0] == 404
         assert c.get("/api/review/..%2Fproject.yaml")[0] == 404
-        assert "最終チェック" in c.get("/")[1]
+        assert "最終チェック" in c.page()[:2][1]
+
+
+def test_server_rejects_ill_typed_review_bodies(wd):
+    standard_report(wd)
+    path = review_path(wd, "draft.md")
+    with serving(wd) as c:
+        for body in ({"items": ["x"]}, {"items": [{"start": 0}]}, {"items": [{"id": "user-1", "end": 3}]},
+                     {"items": [{"id": "user-1", "start": 0, "end": 3, "note": ["x"]}]}, {"remove": "user-1"},
+                     {"items": [], "extra": 1}):
+            code, err = c.put("/api/review/draft.md", body)
+            assert code == 400 and "error" in err, body
+    assert not path.exists()
 
 
 def test_server_refuses_symlinked_drafts(wd, tmp_path):

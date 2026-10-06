@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .check import READER_KIND_LABEL, CheckReport, dash_hits, fresh_report
 from .files import atomic_write, create_new, dump_yaml
@@ -72,6 +72,23 @@ class Review(BaseModel):
     draft: str
     items: list[Item] = []
     updated_at: str = ""
+
+
+class ItemEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = ""
+    decision: str | None = None
+    note: str | None = None
+    result: str | None = None
+    regenerate: bool = False
+    start: int | None = None
+    end: int | None = None
+
+
+class ReviewEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[ItemEdit] = []
+    remove: list[str] = []
 
 
 def _item_id(kind: str, category: str, text: str) -> str:
@@ -223,10 +240,11 @@ def mark_flags(it: Item, src: str) -> None:
 def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Review:
     """Partial update: items in body["items"] are updated (new user-* ids are created from start/end);
     ids in body["remove"] (user items) are removed; everything else is left as it is."""
+    edit = ReviewEdit.model_validate(body)
     src = wd.read(draft)
     rev = load_review(wd, draft, src)
-    sent = {str(x.get("id") or f"user-{secrets.token_hex(4)}"): x for x in body.get("items", [])}
-    remove = {str(x) for x in body.get("remove", [])}
+    sent = {x.id or f"user-{secrets.token_hex(4)}": x for x in edit.items}
+    remove = set(edit.remove)
     known = {i.id for i in rev.items}
     items = []
     for it in rev.items:
@@ -240,8 +258,8 @@ def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Rev
             continue
         if not iid.startswith("user-"):
             raise ValueError(f"知らない項目です: {iid}")
-        a, b = int(x["start"]), int(x["end"])
-        if not 0 <= a < b <= len(src):
+        a, b = x.start, x.end
+        if a is None or b is None or not 0 <= a < b <= len(src):
             raise ValueError(f"{iid}: 位置が下書きの外です")
         it = Item(id=iid, kind="user", start=a, end=b, text=src[a:b])
         update_item(it, x, src, source)
@@ -254,21 +272,20 @@ def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Rev
     return rev
 
 
-def update_item(it: Item, x: dict, src: str, source: str = "") -> None:
+def update_item(it: Item, x: ItemEdit, src: str, source: str = "") -> None:
     before = (it.decision, it.note, it.rewrite)
-    decision = x.get("decision", it.decision)
+    decision = it.decision if x.decision is None else x.decision
     if decision not in ("", "keep", "delete", "rewrite"):
         raise ValueError(f"決定は keep, delete, rewrite のどれかにしてください: {decision}")
     it.decision = decision
-    it.note = str(x.get("note", it.note))
-    if x.get("regenerate"):
+    if x.note is not None:
+        it.note = x.note
+    if x.regenerate:
         it.rewrite = None
-    else:
-        result = x.get("result")
-        if result is not None and (it.rewrite is None or str(result) != it.rewrite.result):
-            it.rewrite = Rewrite(result=strip_block_marks(src, it.start, str(result).strip()), source="user",
-                                 made_from=current_text(it, src), note=it.note,
-                                 scope=it.rewrite.scope if it.rewrite else "span")
+    elif x.result is not None and (it.rewrite is None or x.result != it.rewrite.result):
+        it.rewrite = Rewrite(result=strip_block_marks(src, it.start, x.result.strip()), source="user",
+                             made_from=current_text(it, src), note=it.note,
+                             scope=it.rewrite.scope if it.rewrite else "span")
     if source and (it.decision, it.note, it.rewrite) != before:
         it.source = source
 

@@ -401,7 +401,7 @@ mark.chg { background: color-mix(in srgb, var(--sage) 20%, transparent); border-
     <button id="confirm-btn" class="primary">確定してエージェントに渡す</button>
   </div>
 </footer>
-<script>
+<script nonce="{{KUMIMASU_NONCE}}">
 const S = { data: null, filter: "all", timers: {}, version: "", viewing: null, lastInput: 0, unitsKey: "" };
 const FC = { draft: null, html: "", items: [], removed: [], table: [], timer: null, finals: {}, final: null,
   viewing: false, dirty: false, lastApply: null };
