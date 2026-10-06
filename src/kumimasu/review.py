@@ -238,8 +238,6 @@ def mark_flags(it: Item, src: str) -> None:
 
 
 def save_decisions(wd: WorkDir, draft: str, body: dict, source: str = "") -> Review:
-    """Partial update: items in body["items"] are updated (new user-* ids are created from start/end);
-    ids in body["remove"] (user items) are removed; everything else is left as it is."""
     edit = ReviewEdit.model_validate(body)
     src = wd.read(draft)
     rev = load_review(wd, draft, src)

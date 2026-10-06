@@ -38,7 +38,7 @@ class _Cursor:
         return runs
 
     def skip_destination(self) -> None:
-        """Move past `](dest "title")` or `[ref]` that follows link text, so later text is not found inside a URL."""
+        # Later text must not be found inside a link destination.
         s, p = self.src, self.pos
         if s.startswith("](", p):
             depth, p = 1, p + 2

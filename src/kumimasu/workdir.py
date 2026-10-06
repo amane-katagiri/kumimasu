@@ -86,7 +86,6 @@ class WorkDir:
         return [Unit.model_validate(u) for u in self._yaml(self.units_file, "init") or []]
 
     def raw_units(self) -> list[Unit]:
-        """The units as init split them, before a digest replaced them (the digest's `from` points here)."""
         if not self.raw_units_file.exists():
             return []
         return [Unit.model_validate(u) for u in self._yaml(self.raw_units_file, "init") or []]
