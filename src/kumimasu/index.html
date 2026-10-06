@@ -128,11 +128,10 @@ main { flex: 1; }
 
 .q { margin: 0 0 var(--s5); }
 .q .qt { font-weight: 600; margin-bottom: 2px; }
-.q .why { color: var(--ink-2); font-size: var(--t-s); }
+.q .why { color: var(--ink-3); font-size: var(--t-s); }
 .refs { color: var(--ink-3); font-size: var(--t-s); font-variant-numeric: tabular-nums; }
 .q .ctx { color: var(--ink-2); font-size: var(--t-s); margin: 2px 0 0; }
 .q .refline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); margin: var(--s1) 0 var(--s2); }
-.q .why { color: var(--ink-3); }
 .ref { border: 0; background: transparent; color: var(--accent); font-size: var(--t-s); font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: 4px;
   text-decoration: underline dotted; text-underline-offset: 3px; line-height: 1.6; }
 .ref:hover, .ref.on { background: color-mix(in srgb, var(--accent) 12%, transparent); text-decoration-style: solid; }
@@ -454,7 +453,10 @@ function matches(f, u) {
 const visible = (u) => matches(S.filter, u);
 const unitById = (id) => id.startsWith("raw:") ? S.data.originals[id.slice(4)] : S.data.units.find((u) => u.id === id);
 const unitWhere = (u) => u.path || [u.source, u.section].filter(Boolean).join(" / ");
-const refs = (ids) => ids.map((i) => `<button type="button" class="ref" data-ref="${esc(i)}" aria-haspopup="dialog">${esc(i)}</button>`).join("");
+const refs = (ids, raw = false) => ids.map((i) => `<button type="button" class="ref" data-ref="${raw ? "raw:" : ""}${esc(i)}" aria-haspopup="dialog"${raw ? ' title="digest 前の単位"' : ""}>${esc(i)}</button>`).join("");
+const refList = (ids, n = 6, raw = false) => refs(ids.slice(0, n), raw) + (ids.length > n ? `<span>ほか ${ids.length - n}</span>` : "");
+const unitBody = (u) => u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`;
+const unitsKey = () => { const d = S.data.design; return JSON.stringify([S.filter, S.data.units, d && [d.units, d.skip, d.aside]]); };
 
 function renderFilters() {
   if (!S.data.design && S.filter in USE_FILTERS) S.filter = "all";
@@ -467,7 +469,7 @@ function renderFilters() {
 
 function renderUnits() {
   const d = S.data.design;
-  S.unitsKey = JSON.stringify([S.filter, S.data.units, d && [d.units, d.skip, d.aside]]);
+  S.unitsKey = unitsKey();
   renderFilters();
   const box = $("#units");
   box.innerHTML = "";
@@ -477,7 +479,6 @@ function renderUnits() {
     const color = u.origin === "answer" ? "var(--answer)" : COLOR[u.searchable];
     const tag = u.origin === "answer" ? "回答" : L().searchable[u.searchable];
     const where = unitWhere(u);
-    const body = u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`;
     const isSkip = d && d.skip.some((x) => x.units.includes(u.id));
     const isAside = d && d.aside.some((x) => x.id === u.id);
     const lu = d && d.units.find((x) => x.id === u.id);
@@ -492,11 +493,11 @@ function renderUnits() {
     row.className = "unit" + (use === "drop" ? " drop" : "");
     row.id = `unit-${u.id}`;
     const same = u.members && u.members.length ? `<span>同じ内容: ${u.members.map(esc).join(", ")}</span>` : "";
-    const orig = u.origin === "digest" && u.from && u.from.length && S.data.originals[u.from[0]] ? `<span class="orig">元${origRefs(u.from)}</span>` : "";
+    const orig = u.origin === "digest" && u.from && u.from.length && S.data.originals[u.from[0]] ? `<span class="orig">元${refList(u.from, 6, true)}</span>` : "";
     const promoted = d && use !== "drop" ? d.units.find((x) => x.id === u.id && x.promoted_for) : null;
     const pr = promoted ? `<span class="promoted">用語「${esc(promoted.promoted_for)}」の説明として触れる</span>` : "";
     const ctx = u.context ? `<div class="why">問い: ${esc(u.context)}</div>` : "";
-    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span class="path">${esc(where)}</span>` : ""}${orig}${same}${pr}</div>${ctx}${body}</div>${seg}`;
+    row.innerHTML = `<div><div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span class="path">${esc(where)}</span>` : ""}${orig}${same}${pr}</div>${ctx}${unitBody(u)}</div>${seg}`;
     row.querySelectorAll("button[data-use]").forEach((b) => b.addEventListener("click", () => save("/api/design", { units: { [u.id]: b.dataset.use } }, true)));
     row.querySelector("button[data-noise=skip]")?.addEventListener("click", () =>
       save("/api/design", { toggle_skip: { unit: u.id, on: !isSkip } }, true));
@@ -508,8 +509,6 @@ function renderUnits() {
   }
   if (!box.children.length) box.innerHTML = `<p class="note">該当する単位はありません。</p>`;
 }
-
-const origRefs = (ids, n = 6) => ids.slice(0, n).map((i) => `<button type="button" class="ref" data-ref="raw:${esc(i)}" aria-haspopup="dialog" title="digest 前の単位">${esc(i)}</button>`).join("") + (ids.length > n ? `<span>ほか ${ids.length - n}</span>` : "");
 
 function renderDigest() {
   const boxes = [$("#digest-note"), $("#wait-digest")];
@@ -664,7 +663,6 @@ function renderRules() {
 }
 
 const num = (n) => Number(n).toLocaleString("ja-JP");
-const refList = (ids, n = 6) => refs(ids.slice(0, n)) + (ids.length > n ? `<span>ほか ${ids.length - n}</span>` : "");
 
 function renderLoad() {
   const box = $("#load");
@@ -720,11 +718,6 @@ function debounce(key, fn) {
   S.timers[key] = setTimeout(() => { delete S.timers[key]; fn(); }, 600);
 }
 
-function unitsChanged() {
-  const d = S.data.design;
-  return JSON.stringify([S.filter, S.data.units, d && [d.units, d.skip, d.aside]]) !== S.unitsKey;
-}
-
 async function save(path, body, rerender) {
   status("保存中…");
   try {
@@ -732,7 +725,7 @@ async function save(path, body, rerender) {
     S.version = S.data.version;
     status("保存しました");
     if (rerender) { renderUnits(); renderDesign(); return; }
-    if (unitsChanged()) renderUnits();
+    if (unitsKey() !== S.unitsKey) renderUnits();
     else renderFilters();
     if (S.data.design) { renderCounts(); renderLoad(); renderTerms(); renderConflicts(); }
   } catch (e) { status("保存できません: " + e.message, true); }
@@ -746,13 +739,17 @@ function renderAll() {
   renderUnits(); renderInterview(); renderDesign(); renderDigest();
 }
 
+function adopt(r) {
+  S.data = r;
+  S.version = r.version;
+  renderAll();
+  showScreen(r.stage.stage);
+}
+
 async function boot() {
   try {
-    S.data = await api("/api/state");
+    adopt(await api("/api/state"));
   } catch (e) { status("読み込めません: " + e.message, true); return; }
-  S.version = S.data.version;
-  renderAll();
-  showScreen(S.data.stage.stage);
   status("読み込みました");
   setTimeout(poll, S.data.poll_seconds * 1000);
 }
@@ -833,10 +830,7 @@ function openRestart(s, opts) {
     try {
       const r = await api("/api/restart", { method: "POST", body: { from: s, mode, note: $("#restart-note").value } });
       dlg.close();
-      S.data = r;
-      S.version = r.version;
-      renderAll();
-      showScreen(r.stage.stage);
+      adopt(r);
       status(`ラウンド ${r.stage.round} を「${r.stage.labels[s]}」から始めました`);
     } catch (e) {
       $("#restart-err").textContent = "やり直せません: " + e.message;
@@ -895,8 +889,8 @@ function openRef(a, pinned) {
   const pop = $("#ref-pop");
   pop.innerHTML = `<div class="head"><span class="id">${esc(u.id)}</span><span><i class="dot" style="--c: ${color}"></i>${esc(tag)}</span>${where ? `<span>${esc(where)}</span>` : ""}</div>
     ${u.context ? `<div class="head">問い: ${esc(u.context)}</div>` : ""}
-    ${u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`}
-    ${origs.length ? `<div class="origs"><span class="label">書き直す前の単位（digest の元）</span>${origs.map((o) => `<div class="o"><div class="head"><span class="id">${esc(o.id)}</span>${unitWhere(o) ? `<span>${esc(unitWhere(o))}</span>` : ""}</div>${o.kind === "code" ? `<pre>${esc(o.text)}</pre>` : `<div class="text">${linkify(o.text)}</div>`}</div>`).join("")}</div>` : ""}
+    ${unitBody(u)}
+    ${origs.length ? `<div class="origs"><span class="label">書き直す前の単位（digest の元）</span>${origs.map((o) => `<div class="o"><div class="head"><span class="id">${esc(o.id)}</span>${unitWhere(o) ? `<span>${esc(unitWhere(o))}</span>` : ""}</div>${unitBody(o)}</div>`).join("")}</div>` : ""}
     ${$("#view-design").hidden || raw ? "" : `<div class="acts"><button type="button" class="btn quiet" data-jump="${esc(u.id)}">材料の一覧で見る</button></div>`}`;
   pop.querySelector("[data-jump]")?.addEventListener("click", () => jumpToUnit(u.id));
   placeFcPop(pop, a.getBoundingClientRect());
@@ -936,9 +930,7 @@ async function confirmStage() {
     status("確定中…");
     const r = await api("/api/confirm", { method: "POST", body: { note: $("#confirm-note").value } });
     $("#confirm-note").value = "";
-    S.data = r; S.version = r.version;
-    renderAll();
-    showScreen(r.stage.stage);
+    adopt(r);
     status(`確定しました。エージェントに渡しました（次: ${r.stage.labels[r.stage.stage]}）`);
   } catch (e) { status("確定できません: " + e.message, true); }
 }
