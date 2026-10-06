@@ -40,6 +40,8 @@ class Client:
         h = {"Content-Type": "application/json"} if data is not None else {}
         if token is not None:
             h["X-Kumimasu-Token"] = token
+        if method in ("POST", "PUT") and token is not None:
+            h["X-Kumimasu-Version"] = self.version(token)
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=h | (headers or {}))
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
@@ -49,6 +51,10 @@ class Client:
         except urllib.error.HTTPError as e:
             text = e.read().decode()
             return e.code, json.loads(text) if text.startswith("{") else text, e.headers
+
+    def version(self, token: str = TOKEN) -> str:
+        code, body, _ = self.request("/api/version", token=token)
+        return body["version"] if code == 200 else ""
 
     def get(self, path: str, **kw):
         return self.request(path, **kw)[:2]

@@ -432,6 +432,40 @@ async function api(path, opts) {
   return j;
 }
 
+const W = { chain: Promise.resolve(), epoch: 0, inflight: 0, done: 0 };
+class Stale extends Error {}
+
+// Writes go one at a time, each with the version the previous one returned, so two saves in flight never refuse each other.
+function write(path, method, body) {
+  const epoch = W.epoch;
+  const run = W.chain.then(async () => {
+    if (epoch !== W.epoch) throw new Stale("");
+    W.inflight++;
+    try {
+      const r = await request(path, { method, body, headers: { "X-Kumimasu-Version": S.version } });
+      const j = await r.json();
+      if (r.status === 409 && j.stale) { await conflict(); throw new Stale(j.error); }
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      S.version = j.version || (j.review && j.review.version) || S.version;
+      W.done++;
+      return j;
+    } finally { W.inflight--; }
+  });
+  W.chain = run.catch(() => {});
+  return run;
+}
+
+async function conflict() {
+  W.epoch++;
+  Object.values(S.timers).forEach(clearTimeout);
+  S.timers = {};
+  clearTimeout(FC.timer);
+  FC.timer = null;
+  FC.removed = [];
+  try { await reload(); } catch (e) { /* the message below still tells the user to look again */ }
+  status("ほかの所（エージェントや別のタブ）で先に変更されていたので、読み込み直しました。直前の変更は保存していません。もう一度入れてください", true);
+}
+
 const draftPath = (kind) => `/api/${kind}/${encodeURIComponent(FC.draft)}`;
 
 function useOf(id) {
@@ -595,8 +629,8 @@ function renderDesign() {
   }));
   $("#followup")?.addEventListener("click", async () => {
     status("聞き返しを考えています…");
-    try { S.data = await api("/api/followup", { method: "POST", body: {} }); S.version = S.data.version; status("保存しました"); renderUnits(); renderDesign(); }
-    catch (e) { status("聞き返せません: " + e.message, true); }
+    try { S.data = await write("/api/followup", "POST", {}); status("保存しました"); renderUnits(); renderDesign(); }
+    catch (e) { if (!(e instanceof Stale)) status("聞き返せません: " + e.message, true); }
   });
   box.querySelectorAll("input[data-followup]").forEach((el) => el.addEventListener("change", () =>
     save("/api/design", { followups: { [el.dataset.followup]: el.value } }, true)));
@@ -721,14 +755,13 @@ function debounce(key, fn) {
 async function save(path, body, rerender) {
   status("保存中…");
   try {
-    S.data = await api(path, { method: "PUT", body });
-    S.version = S.data.version;
+    S.data = await write(path, "PUT", body);
     status("保存しました");
     if (rerender) { renderUnits(); renderDesign(); return; }
     if (unitsKey() !== S.unitsKey) renderUnits();
     else renderFilters();
     if (S.data.design) { renderCounts(); renderLoad(); renderTerms(); renderConflicts(); }
-  } catch (e) { status("保存できません: " + e.message, true); }
+  } catch (e) { if (!(e instanceof Stale)) status("保存できません: " + e.message, true); }
 }
 
 function renderAll() {
@@ -828,11 +861,12 @@ function openRestart(s, opts) {
     const go = $("#restart-go");
     go.disabled = true;
     try {
-      const r = await api("/api/restart", { method: "POST", body: { from: s, mode, note: $("#restart-note").value } });
+      const r = await write("/api/restart", "POST", { from: s, mode, note: $("#restart-note").value });
       dlg.close();
       adopt(r);
       status(`ラウンド ${r.stage.round} を「${r.stage.labels[s]}」から始めました`);
     } catch (e) {
+      if (e instanceof Stale) { dlg.close(); return; }
       $("#restart-err").textContent = "やり直せません: " + e.message;
       go.disabled = false;
     }
@@ -841,7 +875,7 @@ function openRestart(s, opts) {
 }
 
 function busy() {
-  return Object.keys(S.timers).length > 0 || FC.timer || Date.now() - S.lastInput < 4000 || !$("#fc-pop").hidden || $("#fc-diff").open || $("#restart-dlg").open;
+  return Object.keys(S.timers).length > 0 || FC.timer || W.inflight > 0 || Date.now() - S.lastInput < 4000 || !$("#fc-pop").hidden || $("#fc-diff").open || $("#restart-dlg").open;
 }
 
 async function poll() {
@@ -856,9 +890,11 @@ async function poll() {
 }
 
 async function reload() {
-  const prev = S.data.stage.stage, prevWait = S.data.stage.waiting;
-  S.data = await api("/api/state");
-  S.version = S.data.version;
+  const prev = S.data.stage.stage, prevWait = S.data.stage.waiting, done = W.done;
+  const r = await api("/api/state");
+  if (W.done !== done) return;
+  S.data = r;
+  S.version = r.version;
   renderAll();
   const now = S.data.stage.stage, wait = S.data.stage.waiting;
   showScreen(now !== prev ? now : S.viewing);
@@ -928,11 +964,11 @@ async function confirmStage() {
   try {
     if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
     status("確定中…");
-    const r = await api("/api/confirm", { method: "POST", body: { note: $("#confirm-note").value } });
+    const r = await write("/api/confirm", "POST", { note: $("#confirm-note").value });
     $("#confirm-note").value = "";
     adopt(r);
     status(`確定しました。エージェントに渡しました（次: ${r.stage.labels[r.stage.stage]}）`);
-  } catch (e) { status("確定できません: " + e.message, true); }
+  } catch (e) { if (!(e instanceof Stale)) status("確定できません: " + e.message, true); }
 }
 
 function cpLen(text) {
@@ -1314,7 +1350,7 @@ function saveReview(now) {
   clearTimeout(FC.timer);
   FC.timer = null;
   if (now) return pushReview(true).catch(() => {});
-  FC.timer = setTimeout(() => { FC.timer = null; pushReview(false); }, 600);
+  FC.timer = setTimeout(() => { FC.timer = null; pushReview(false).catch(() => {}); }, 600);
 }
 
 async function pushReview(repaint) {
@@ -1322,20 +1358,20 @@ async function pushReview(repaint) {
   try {
     const items = FC.items.map((i) => ({ ...(i.id ? { id: i.id } : {}), decision: i.decision, note: i.note, start: i.start, end: i.end,
       ...(i.rewrite ? { result: i.rewrite.result } : {}), ...(i.regenerate ? { regenerate: true } : {}) }));
-    const r = await api(draftPath("review"), { method: "PUT", body: { items, remove: FC.removed } });
-    FC.items = r.items; FC.dirty = r.dirty; FC.removed = []; S.version = r.version;
+    const r = await write(draftPath("review"), "PUT", { items, remove: FC.removed });
+    FC.items = r.items; FC.dirty = r.dirty; FC.removed = [];
     setApplyEnabled();
     if (repaint) paintFinal(); else renderItems();
     status("保存しました");
-  } catch (e) { status("保存できません: " + e.message, true); throw e; }
+  } catch (e) { if (!(e instanceof Stale)) status("保存できません: " + e.message, true); throw e; }
 }
 
 async function applyFinal() {
   try {
     if (FC.timer) { clearTimeout(FC.timer); FC.timer = null; await pushReview(false); }
     status("反映中…");
-    const a = await api(draftPath("apply"), { method: "POST", body: {} });
-    FC.items = a.review.items; FC.dirty = a.review.dirty; S.version = a.review.version;
+    const a = await write(draftPath("apply"), "POST", {});
+    FC.items = a.review.items; FC.dirty = a.review.dirty;
     FC.lastApply = a.result; FC.final = a.final;
     FC.finals[FC.draft] = a.result.out;
     const opt = [...$("#fc-draft").options].find((o) => o.value === FC.draft);
@@ -1344,7 +1380,7 @@ async function applyFinal() {
     await toggleResult();
     showDiff();
     status("反映しました: " + a.result.out + "（結果を表示しています。決定を変えるときは「下書きに戻る」）");
-  } catch (e) { status("反映できません: " + e.message, true); }
+  } catch (e) { if (!(e instanceof Stale)) status("反映できません: " + e.message, true); }
 }
 
 function showDiff() {

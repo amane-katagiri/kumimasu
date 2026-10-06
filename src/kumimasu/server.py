@@ -41,6 +41,7 @@ HOST = "127.0.0.1"
 SOURCE = "human-ui"
 MAX_BODY = 2 * 1024 * 1024
 TOKEN_HEADER = "X-Kumimasu-Token"
+VERSION_HEADER = "X-Kumimasu-Version"
 TOKEN_SLOT = b"{{KUMIMASU_TOKEN}}"
 NONCE_SLOT = b"{{KUMIMASU_NONCE}}"
 REQUEST_TIMEOUT = 30
@@ -65,6 +66,11 @@ class HttpError(Exception):
 class NotFound(HttpError):
     def __init__(self) -> None:
         super().__init__(404, "見つかりません")
+
+
+class Stale(HttpError):
+    def __init__(self) -> None:
+        super().__init__(409, "ほかの所（エージェントや別のタブ）で先に変更されています")
 
 
 class WriteApp:
@@ -282,13 +288,25 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 self._send(200, data, "text/markdown; charset=utf-8",
                            {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
                 return
-            body = self._body() if method in ("POST", "PUT") else {}
             if (handler := exact.get((method, path))) is not None:
-                self._json(handler(body))
+                call = handler
             elif len(parts) == 3 and parts[0] == "api" and (named_handler := named.get((method, parts[1]))) is not None:
-                self._json(named_handler(parts[2], body))
+                def call(body: dict) -> dict:
+                    return named_handler(parts[2], body)
             else:
                 raise NotFound
+            if method == "GET":
+                self._json(call({}))
+                return
+            body = self._body()
+            with ops.LOCK:
+                sent = self.headers.get(VERSION_HEADER)
+                if sent is None:
+                    raise HttpError(428, f"{VERSION_HEADER} がありません")
+                if sent != app.version():
+                    raise Stale
+                data = call(body)
+            self._json(data)
 
         def _handle(self, method: str) -> None:
             url = urlparse(self.path)
@@ -296,7 +314,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 self._check(url.path, url.query)
                 self._route(method, url.path)
             except HttpError as e:
-                self._json({"error": str(e)}, e.code)
+                self._json({"error": str(e)} | ({"stale": True} if isinstance(e, Stale) else {}), e.code)
             except Exception as e:  # noqa: BLE001
                 code = next((c for kinds, c in ERRORS if isinstance(e, kinds)), 500)
                 self._json({"error": app.public(str(e)) if code != 500 else "サーバーの内部エラーです"}, code)

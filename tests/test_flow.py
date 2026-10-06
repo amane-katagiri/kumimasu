@@ -363,7 +363,23 @@ def test_version_endpoint_etag_and_live_changes(wd):
         assert code == 200 and now["version"] != v["version"]
         code, body = c.post("/api/confirm", {"note": "n"})
         assert body["handoff"]["source"] == "human-ui" and body["stage"]["stage"] == "design"
-        assert c.put("/api/interview", {"answers": {"q1": "x"}})[0] == 409
+        code, body = c.put("/api/interview", {"answers": {"q1": "x"}})
+        assert code == 409 and "stale" not in body
+
+
+def test_server_refuses_writes_from_a_stale_version(wd):
+    with serving(wd) as c:
+        assert c.put("/api/interview", {"answers": {"q1": "画面から"}})[0] == 200
+        seen = c.version()
+        time.sleep(0.01)
+        run_cli("answer", wd.root, "q1", "CLI から")
+        code, body = c.put("/api/interview", {"answers": {"q1": "古い画面から"}}, headers={"X-Kumimasu-Version": seen})
+        assert code == 409 and body["stale"] is True and wd.interview().questions[0].answer == "CLI から"
+        code, _ = c.request("/api/interview", "PUT", {"answers": {"q1": "x"}}, token=None,
+                            headers={"X-Kumimasu-Token": "test-token"})[:2]
+        assert code == 428 and wd.interview().questions[0].answer == "CLI から"
+        code, body = c.put("/api/interview", {"answers": {"q1": "新しい画面から"}}, headers={"X-Kumimasu-Version": c.version()})
+        assert code == 200 and body["version"] == c.version()
 
 
 def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):
