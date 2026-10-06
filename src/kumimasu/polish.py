@@ -177,7 +177,7 @@ def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, .
         if not flags or not apply:
             rd.calls = counter.calls - before
             break
-        repl = ask_replacements(counter, polish_prompt(text, flags))
+        repl = ask_replacements(counter, polish_prompt(text, flags), [f.id for f in flags])
         new, log, edits = apply_replacements(text, flags, repl)
         rd.log, rd.edits, rd.calls = log, len(edits), counter.calls - before
         scope = neighborhood(new, edits)

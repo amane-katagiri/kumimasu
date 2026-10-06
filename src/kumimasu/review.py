@@ -63,6 +63,7 @@ class Item(BaseModel):
     decision: Decision = ""
     note: str = ""
     rewrite: Rewrite | None = None
+    attempt: int = 0
     stale: bool = False
     note_changed: bool = False
     source: str = ""
@@ -185,7 +186,7 @@ def load_review(wd: WorkDir, draft: str, src: str | None = None) -> Review:
     for it in items_from_checks(src, load_reports(wd, draft), units):
         old = by_id.get(it.id)
         if old:
-            it.decision, it.note, it.rewrite, it.source = old.decision, old.note, old.rewrite, old.source
+            it.decision, it.note, it.rewrite, it.source, it.attempt = old.decision, old.note, old.rewrite, old.source, old.attempt
         elif it.kind in ("meta", "caveat", "glue", "flow") and text_hash(it.text) in keep:
             it.decision = "keep"
         items.append(it)
@@ -281,13 +282,18 @@ def update_item(it: Item, x: ItemEdit, src: str, source: str = "") -> None:
     if x.note is not None:
         it.note = x.note
     if x.regenerate:
-        it.rewrite = None
+        regenerate_item(it)
     elif x.result is not None and (it.rewrite is None or x.result != it.rewrite.result):
         it.rewrite = Rewrite(result=strip_block_marks(src, it.start, x.result.strip()), source="user",
                              made_from=current_text(it, src), note=it.note,
                              scope=it.rewrite.scope if it.rewrite else "span")
     if source and (it.decision, it.note, it.rewrite) != before:
         it.source = source
+
+
+def regenerate_item(it: Item) -> None:
+    it.rewrite = None
+    it.attempt += 1
 
 
 def update_keep(wd: WorkDir, rev: Review) -> None:
@@ -330,7 +336,9 @@ def rewrite_prompt(src: str, items: list[Item]) -> str:
     for it in items:
         a, b = enclosing_sentences(src, it.start, it.end)
         focus = f"特に直す箇所（文の一部）: {src[it.start:it.end]}\n\n" if (a, b) != (it.start, it.end) else ""
-        blocks.append(f"## 項目 {it.id}\n\n直す文:\n{src[a:b]}\n\n{focus}"
+        # The attempt number makes a regenerated item's prompt differ, so the cache does not hand back the old reply.
+        again = f"（作り直し {it.attempt} 回目）\n\n" if it.attempt else ""
+        blocks.append(f"## 項目 {it.id}\n\n{again}直す文:\n{src[a:b]}\n\n{focus}"
                       + (f"著者のメモ: {it.note}\n\n" if it.note else "") + f"文脈（この段落の中の文です）:\n{paragraph_at(src, it.start, it.end)}")
     return REWRITE_PROMPT_JA.format(items="\n\n".join(blocks))
 
@@ -446,7 +454,7 @@ def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate:
     src, rev = ctx.src, ctx.review
     for it in rev.items:
         if it.id in regenerate:
-            it.rewrite = None
+            regenerate_item(it)
             mark_flags(it, src)
     code = code_ranges(src)
     placed = [i for i in rev.items if i.start is not None and i.end is not None]
@@ -460,7 +468,7 @@ def apply_review(wd: WorkDir, draft: str, provider: Provider | None, regenerate:
     if fresh:
         if provider is None:
             raise ValueError("結果の無い書き直す項目があるので、書き直しの provider が要ります")
-        got = ask_replacements(provider, rewrite_prompt(src, fresh))
+        got = ask_replacements(provider, rewrite_prompt(src, fresh), [i.id for i in fresh])
         calls = 1
         for it in fresh:
             if it.id in got:

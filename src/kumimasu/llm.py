@@ -62,13 +62,20 @@ def extract_json(text: str) -> Any:
     raise ValueError(f"JSON が閉じていません: {text[:120]!r}")
 
 
+def forget(provider: Provider, prompt: str, schema: dict | None = None) -> None:
+    if (drop := getattr(provider, "forget", None)) is not None:
+        drop(prompt, json_schema=schema)
+
+
 def ask_json(provider: Provider, prompt: str, schema: dict) -> dict:
     raw = provider.complete(prompt, json_schema=schema)
     try:
         data = extract_json(raw)
     except ValueError as e:
+        forget(provider, prompt, schema)
         raise LLMError(f"LLM の応答から JSON を読めません: {e}") from e
     if not isinstance(data, dict):
+        forget(provider, prompt, schema)
         raise LLMError(f"LLM の応答が JSON のオブジェクトではありません: {raw[:120]!r}")
     return data
 
@@ -83,9 +90,13 @@ def strings(data: dict, key: str) -> list[str]:
     return [str(x).strip() for x in value if isinstance(x, (str, int, float))] if isinstance(value, list) else []
 
 
-def ask_replacements(provider: Provider, prompt: str) -> dict[str, str]:
-    data = ask_json(provider, prompt, obj(items=arr(obj(id=STR, replacement=STR))))
-    return {str(x.get("id")): str(x.get("replacement", "")).strip() for x in rows(data, "items")}
+def ask_replacements(provider: Provider, prompt: str, ids: list[str]) -> dict[str, str]:
+    schema = obj(items=arr(obj(id=STR, replacement=STR)))
+    data = ask_json(provider, prompt, schema)
+    got = {str(x.get("id")): str(x.get("replacement", "")).strip() for x in rows(data, "items")}
+    if not set(ids) <= got.keys():
+        forget(provider, prompt, schema)
+    return got
 
 
 STR: dict = {"type": "string"}
@@ -271,6 +282,10 @@ class CountingProvider:
     def misses(self) -> int:
         return getattr(self.inner, "misses", self.calls)
 
+    def forget(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> None:
+        if (drop := getattr(self.inner, "forget", None)) is not None:
+            drop(prompt, system=system, json_schema=json_schema)
+
 
 class CachedProvider:
     def __init__(self, inner: Provider, cache_dir: str | os.PathLike) -> None:
@@ -287,8 +302,14 @@ class CachedProvider:
                  prompt]
         return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
+    def _path(self, prompt: str, system: str | None, json_schema: dict | None) -> Path:
+        return self.dir / self.inner.name / (self._key(prompt, system, json_schema) + ".json")
+
+    def forget(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> None:
+        self._path(prompt, system, json_schema).unlink(missing_ok=True)
+
     def complete(self, prompt: str, *, system: str | None = None, json_schema: dict | None = None) -> str:
-        path = self.dir / self.inner.name / (self._key(prompt, system, json_schema) + ".json")
+        path = self._path(prompt, system, json_schema)
         if path.is_file() and not path.is_symlink():
             with self._lock:
                 self.hits += 1

@@ -13,9 +13,10 @@ from typer.testing import CliRunner
 from kumimasu import cli_common as cc
 from kumimasu.check import Check, CheckReport, dash_hits, surface_checks
 from kumimasu.cli import app
+from kumimasu.errors import LLMError
 from kumimasu.infounits import info_units
 from kumimasu.keep import KeepStore, text_hash
-from kumimasu.llm import FakeProvider
+from kumimasu.llm import CachedProvider, CountingProvider, FakeProvider, ask_json
 from kumimasu.model import Project
 from kumimasu.polish import find_flags
 from kumimasu.render import render
@@ -459,3 +460,41 @@ def test_rewrite_of_part_of_a_sentence_replaces_the_whole_sentence():
     assert rewrite_span(src, it) == (a, b)
     h = src.index("一部")
     assert src[slice(*enclosing_sentences(src, h, h + 2))] == "見出しの一部"
+
+
+def test_regenerate_makes_a_new_call_through_the_cache(wd, tmp_path):
+    _, glue = _two_rewrites(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    seen = []
+
+    def respond(prompt: str) -> str:
+        seen.append(prompt)
+        return json.dumps({"items": [{"id": glue.id, "replacement": f"{len(seen)}回目の文。"}]})
+
+    cached = CachedProvider(FakeProvider(respond), tmp_path / "cache")
+    apply_review(wd, "draft.md", cached)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "regenerate": True}]})
+    apply_review(wd, "draft.md", cached)
+    assert len(seen) == 2 and "作り直し 1 回目" in seen[1]
+    assert next(i for i in load_review(wd, "draft.md").items if i.id == glue.id).rewrite.result == "2回目の文。"
+    apply_review(wd, "draft.md", cached, regenerate=(glue.id,))
+    assert len(seen) == 3 and "作り直し 2 回目" in seen[2]
+
+
+def test_bad_replies_are_not_served_from_the_cache(wd, tmp_path):
+    _, glue = _two_rewrites(wd)
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "rewrite"}]})
+    good = json.dumps({"items": [{"id": glue.id, "replacement": "直した文。"}]})
+    inner = FakeProvider(["JSON ではない", '{"items": []}', good])
+    cached = CachedProvider(inner, tmp_path / "cache")
+    with pytest.raises(LLMError):
+        apply_review(wd, "draft.md", cached)
+    r = apply_review(wd, "draft.md", cached)
+    assert r.rewritten == 0 and glue.id in r.skipped
+    r = apply_review(wd, "draft.md", cached)
+    assert r.rewritten == 1 and len(inner.calls) == 3
+    save_decisions(wd, "draft.md", {"items": [{"id": glue.id, "decision": "keep"}]})
+    with pytest.raises(LLMError):
+        ask_json(CountingProvider(cached), "p", {})
+    assert ask_json(cached, "p", {}) == {"items": []} and cached.misses == 5
+    assert ask_json(cached, "p", {}) == {"items": []} and cached.hits == 1
