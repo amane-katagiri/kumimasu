@@ -9,7 +9,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from pydantic import ValidationError
 
@@ -44,7 +44,6 @@ SOURCE = "human-ui"
 MAX_BODY = 2 * 1024 * 1024
 TOKEN_HEADER = "X-Kumimasu-Token"
 VERSION_HEADER = "X-Kumimasu-Version"
-TOKEN_SLOT = b"{{KUMIMASU_TOKEN}}"
 NONCE_SLOT = b"{{KUMIMASU_NONCE}}"
 REQUEST_TIMEOUT = 30
 SECURITY_HEADERS = {
@@ -55,13 +54,8 @@ SECURITY_HEADERS = {
 }
 PAGE_CSP = ("default-src 'self'; script-src 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-TOKEN_KEY = "kumimasu-token"
 PAGE_PATHS = ("/", "/index.html")
-NO_TOKEN = "kumimasu serve が表示した URL（token 付き）を開いてください"
-# The page drops the token from the address bar and keeps it in this tab's sessionStorage, so a reload lands here.
-RELOAD_PAGE = ('<!doctype html><meta charset="utf-8"><title>kumimasu</title><p>' + NO_TOKEN + '</p>'
-               '<script nonce="{{KUMIMASU_NONCE}}">try { const t = sessionStorage.getItem("' + TOKEN_KEY + '"); '
-               'if (t) location.replace("/?token=" + encodeURIComponent(t)); } catch (e) {}</script>').encode()
+NO_TOKEN = "トークンが違います。kumimasu serve が表示した URL（#token=… 付き）を開き直してください"
 LABELS = {"searchable": SEARCHABLE_LABEL, "use": USE_LABEL, "decision": DECISION_LABEL, "kind": ITEM_KIND_LABEL,
           "register": REGISTER_LABEL, "human_stages": list(ops.HUMAN_STAGES), "note_question": NOTE_QUESTION}
 
@@ -75,11 +69,6 @@ class HttpError(Exception):
 class NotFound(HttpError):
     def __init__(self) -> None:
         super().__init__(404, "見つかりません")
-
-
-class NoToken(HttpError):
-    def __init__(self) -> None:
-        super().__init__(403, NO_TOKEN)
 
 
 class Stale(HttpError):
@@ -225,7 +214,7 @@ class WriteApp:
 
 
 def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
-    page = resources.files("kumimasu").joinpath("index.html").read_bytes().replace(TOKEN_SLOT, token.encode())
+    page = resources.files("kumimasu").joinpath("index.html").read_bytes()
     token_bytes = token.encode()
     exact = {("GET", "/api/drafts"): lambda body: app.drafts(),
              ("GET", "/api/state"): lambda body: app.state(),
@@ -264,7 +253,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
             self._send(code, html.replace(NONCE_SLOT, nonce.encode()), "text/html; charset=utf-8",
                        {"Content-Security-Policy": PAGE_CSP.format(nonce=nonce)})
 
-        def _check(self, path: str, query: str) -> None:
+        def _check(self, path: str) -> None:
             port = self.server.server_address[1]
             hosts = {f"{HOST}:{port}", f"localhost:{port}"}
             if self.headers.get("Host") not in hosts:
@@ -276,11 +265,9 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                 if self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
                     raise HttpError(403, "別のオリジンからの要求は受けません")
                 if not secrets.compare_digest(self.headers.get(TOKEN_HEADER, "").encode(), token_bytes):
-                    raise HttpError(403, "トークンがありません")
-            elif "token" not in (q := parse_qs(query)) and path in PAGE_PATHS:
-                raise NoToken
-            elif not secrets.compare_digest(q.get("token", [""])[0].encode(), token_bytes):
-                raise HttpError(403, NO_TOKEN)
+                    raise HttpError(403, NO_TOKEN)
+            elif path not in PAGE_PATHS:
+                raise NotFound
 
         def _body(self) -> dict:
             if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
@@ -338,10 +325,8 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
         def _handle(self, method: str) -> None:
             url = urlparse(self.path)
             try:
-                self._check(url.path, url.query)
+                self._check(url.path)
                 self._route(method, url.path)
-            except NoToken:
-                self._page(403, RELOAD_PAGE)
             except HttpError as e:
                 self._json({"error": str(e)} | ({"stale": True} if isinstance(e, Stale) else {}), e.code)
             except StepError as e:
@@ -380,7 +365,7 @@ def serve(app: WriteApp, port: int) -> None:
         server = make_server(app, port, token)
     except OSError as e:
         raise StepError(f"{HOST}:{port} で待ち受けられません（{e.strerror or e}）。--port で別のポートを指定してください") from None
-    print(f"kumimasu: http://{HOST}:{server.server_address[1]}/?token={token}  (Ctrl+C to stop)", flush=True)
+    print(f"kumimasu: http://{HOST}:{server.server_address[1]}/#token={token}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

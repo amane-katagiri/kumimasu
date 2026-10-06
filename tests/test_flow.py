@@ -427,28 +427,26 @@ def test_server_rejects_cross_origin_rebinding_and_missing_token(wd):
         assert c.request("/api/confirm", "POST", raw=b"{}", headers={"Content-Length": str(2 * 1024 * 1024 + 1)})[0] == 413
         assert ops.stage(wd) == "design"
         code, page, headers = c.page()
-        assert code == 200 and "test-token" in page and headers["X-Frame-Options"] == "DENY"
+        assert code == 200 and "test-token" not in page and headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
         assert headers["X-Content-Type-Options"] == "nosniff" and headers["Referrer-Policy"] == "no-referrer"
         code, body = c.get("/api/review/draft.md")
         assert code == 404 and str(wd.root) not in json.dumps(body, ensure_ascii=False)
 
 
-def test_server_page_needs_the_url_token_and_runs_only_its_nonce_script(wd):
+def test_server_page_holds_no_token_and_runs_only_its_nonce_script(wd):
     with serving(wd) as c:
-        for path in ("/", "/index.html", "/?token=wrong", "/?token="):
+        for path in ("/", "/index.html", "/?token=wrong"):
             code, body, _ = c.request(path, token=None)
-            assert code == 403 and "test-token" not in json.dumps(body)
-        code, body, headers = c.request("/", token=None)
-        nonce = re.search(r"script-src 'nonce-([\w-]+)'", headers["Content-Security-Policy"])[1]
-        assert f'<script nonce="{nonce}">' in body and 'sessionStorage.getItem("kumimasu-token")' in body
-        assert "sessionStorage" not in json.dumps(c.request("/?token=wrong", token=None)[1])
-        assert c.request("/", headers={"X-Kumimasu-Token": "test-token"})[0] == 403
+            assert code == 200 and "test-token" not in body
+        assert c.get("/other", token=None)[0] == 404
+        code, body = c.get("/api/state", token=None)
+        assert code == 403 and "#token=" in body["error"]
         code, page, headers = c.page()
         csp = headers["Content-Security-Policy"]
         nonce = re.search(r"script-src 'nonce-([\w-]+)'", csp)[1]
         assert code == 200 and f'<script nonce="{nonce}">' in page and "unsafe-inline" not in csp.split("style-src")[0]
-        assert "base-uri 'none'" in csp and "form-action 'none'" in csp
+        assert "base-uri 'none'" in csp and "form-action 'none'" in csp and "location.hash" in page
         assert nonce not in c.page()[1]
 
 

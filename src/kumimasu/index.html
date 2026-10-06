@@ -3,7 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="kumimasu-token" content="{{KUMIMASU_TOKEN}}">
 <title>記事の設計</title>
 <style>
 :root {
@@ -408,7 +407,14 @@ const FC = { draft: null, html: "", items: [], removed: [], table: [], timer: nu
 const COLOR = { yes: "var(--yes)", partial: "var(--partial)", no: "var(--no)", null: "var(--line)" };
 const FILTERS = { all: "すべて", firsthand: "手元だけ・回答", searchable: "検索で届く" };
 const USE_FILTERS = { write: "書く", deep: "掘り下げる", mention: "触れる", drop: "書かない" };
-const TOKEN = document.querySelector('meta[name="kumimasu-token"]').content;
+const TOKEN = (() => {
+  const t = new URLSearchParams(location.hash.slice(1)).get("token");
+  history.replaceState(null, "", location.pathname);
+  try {
+    if (t) sessionStorage.setItem("kumimasu-token", t);
+    return t || sessionStorage.getItem("kumimasu-token") || "";
+  } catch (e) { return t || ""; }
+})();
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -803,8 +809,6 @@ function adopt(r) {
 }
 
 async function boot() {
-  try { sessionStorage.setItem("kumimasu-token", TOKEN); } catch (e) { /* a reload then asks for the URL again */ }
-  history.replaceState(null, "", location.pathname);
   try {
     adopt(await api("/api/state"));
   } catch (e) { status("読み込めません: " + e.message, true); return; }
