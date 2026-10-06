@@ -104,7 +104,7 @@ kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）
 kumimasu draft DIR         # 調べることがあれば providers.researcher 1 回（ウェブ調査）→ providers.writer 1 回（ツールなし）
 kumimasu check DIR         # providers.judge 3 回（網羅・割り戻し・読者の目と形）＋ providers.detector 2–3 回（surface.runs）
 kumimasu revise DIR        # 構造の検査が落ちたときだけ（writer 1 回＋検査、ツールなし）。結果は draft.v2.md
-kumimasu polish DIR [--yes]  # 任意: メタ言説・保守的な但し書き・つなぎの効用文・段落の運び（頭の理由づけ・末尾の結び）・ダッシュの文だけを多数決で見つけ、--yes でその文だけ直す
+kumimasu polish DIR [--yes]  # 任意: メタ言説・保守的な但し書き・つなぎの効用文・ダッシュの文だけを多数決で見つけ、--yes でその文だけ直す。段落の運び（flow）は既定では直さず最終チェックに任せる。本人が頼んだときだけ --rules meta,caveat,glue,flow,dash
 kumimasu confirm DIR --agent [--draft draft.v2.md]
 ```
 

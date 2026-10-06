@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -30,8 +31,8 @@ from conftest import (
 )
 from typer.testing import CliRunner
 
+from kumimasu import cli, factcheck, ops, rules
 from kumimasu import cli_common as cc
-from kumimasu import factcheck, ops, rules
 from kumimasu.check import check, dash_hits, number_flags
 from kumimasu.cli import app
 from kumimasu.design import design, noise_workdir, parse_review, sync_design
@@ -316,6 +317,11 @@ def test_flow_hits_only_in_their_paragraph_slot(wd):
     assert "見つからなくても" not in text and "形の違い" not in text and "AI の記事は AI っぽく読めます。節の長さ" in text
     assert "そこで、項目です。" in text
     assert polish(wd, FakeProvider(_flow_provider), "f.md", ("glue",), False, VOTES, 1, "x.md").rounds[0].hits == 0
+
+
+def test_polish_leaves_flow_to_the_final_check_by_default():
+    default = inspect.signature(cli.polish).parameters["rules"].default
+    assert "flow" not in default.split(",") and "flow" in POLISH_RULES
 
 
 def test_flow_wrapup_does_not_peel_a_paragraph(wd):
