@@ -5,9 +5,12 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from .check import Votes, dash_hits
+from .check import Votes, dash_hits, fresh_report, noted_texts
+from .design import sync_design
 from .generate import DATA_NOTE_JA
+from .infounits import info_units
 from .keep import KeepStore, text_hash
+from .land import guarded, note_units
 from .llm import CountingProvider, ask_replacements
 from .metadiscourse import split_sentences
 from .surface import BRIDGE, CAVEAT, FLOW, GLUE, SLOT, WRAPUP, detect_surface
@@ -132,7 +135,7 @@ def original_slots(text: str) -> dict[str, str]:
 
 
 def find_flags(scope: str, full: str, provider: Provider, material: list[str], rules: tuple[str, ...], votes: Votes,
-               keep: set[str], slots: dict[str, str] | None = None) -> tuple[list[Flag], int]:
+               keep: set[str], slots: dict[str, str] | None = None, protect: tuple[str, ...] = ()) -> tuple[list[Flag], int]:
     found: list[tuple[str, str]] = []
     used = 0
     if {"meta", CAVEAT, GLUE, "flow"} & set(rules):
@@ -146,7 +149,7 @@ def find_flags(scope: str, full: str, provider: Provider, material: list[str], r
         found += [("dash", s) for s in dash_hits(scope)]
     out, seen = [], set()
     for rule, text in found:
-        if text not in seen and text_hash(text) not in keep and locate(full, text):
+        if text not in seen and text_hash(text) not in keep and not guarded(text, protect) and locate(full, text):
             seen.add(text)
             out.append(Flag(id=f"F{len(out) + 1}", rule=rule, text=text))
     return out, used
@@ -156,15 +159,19 @@ def polish(wd: WorkDir, provider: Provider, draft_name: str, rules: tuple[str, .
            max_rounds: int, out: str) -> PolishResult:
     counter = CountingProvider(provider)
     start_misses = counter.misses
-    material = [u.text for u in wd.units()]
+    units = wd.units()
+    notes = note_units(sync_design(wd.design(), units), units) if wd.design_file.exists() else []
+    material = [u.text for u in units + notes]
     keep = KeepStore(wd).hashes()
     text = wd.read(draft_name)
     slots = original_slots(text)
+    checked = fresh_report(wd, draft_name, False)
+    protect = noted_texts(info_units(text), checked.sources) if checked else ()
     scope = text
     res = PolishResult()
     for r in range(1, max_rounds + 1):
         before = counter.calls
-        flags, used = find_flags(scope, text, counter, material, rules, votes, keep, slots)
+        flags, used = find_flags(scope, text, counter, material, rules, votes, keep, slots, protect)
         rd = Round(round=r, scope_chars=len(scope), runs=used, hits=len(flags), flags=flags)
         res.rounds.append(rd)
         if not flags or not apply:

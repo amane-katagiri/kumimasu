@@ -147,6 +147,8 @@ main { flex: 1; }
 .length input { width: 120px; }
 .noise { display: flex; gap: var(--s3); align-items: center; margin: var(--s1) 0; }
 .noise input { flex: 1; min-width: 0; padding: 4px 8px; }
+.noise .tx { flex: 0 1 auto; max-width: 55%; min-width: 0; color: var(--ink-3); font-size: var(--t-s); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle:disabled { opacity: .55; }
 .conflicts { list-style: none; margin: var(--s2) 0 0; padding: 0; }
 .conflicts li { padding: var(--s2) 0 var(--s2) var(--s3); border-left: 2px solid var(--ochre); margin-bottom: var(--s2); }
 .conflicts .what { overflow-wrap: anywhere; }
@@ -477,10 +479,14 @@ function renderUnits() {
     const body = u.kind === "code" ? `<pre>${esc(u.text)}</pre>` : `<div class="text">${linkify(u.text)}</div>`;
     const isSkip = d && d.skip.some((x) => x.units.includes(u.id));
     const isAside = d && d.aside.some((x) => x.id === u.id);
+    const lu = d && d.units.find((x) => x.id === u.id);
+    const isBare = !!lu && lu.land === "bare";
+    const hasNote = !!lu && !!lu.note.trim();
+    const land = lu && (use === "deep" || use === "mention") ? `<button data-noise="land" class="toggle${isBare ? " on" : ""}" aria-pressed="${isBare}"${hasNote ? " disabled" : ""} title="${hasNote ? "一言があるので、一言の範囲で解釈・感想を書く（一言を消すと切り替えられる）" : "結果を述べたら、意味づけ・教訓・効用を足さずに次へ進む"}">結果だけ</button>` : "";
     const seg = use ? `<div class="tools"><div class="seg" role="group" aria-label="使い方">${Object.keys(uses).map((x) =>
       `<button data-use="${x}" class="${x === use ? "on" : ""}" aria-pressed="${x === use}">${uses[x]}</button>`).join("")}</div>
       <div class="toggles"><button data-noise="skip" class="toggle${isSkip ? " on" : ""}" aria-pressed="${isSkip}" title="説明しない前提にする（書かない）">前提扱い</button>` +
-      `<button data-noise="aside" class="toggle${isAside ? " on" : ""}" aria-pressed="${isAside}" title="脱線として入れる">脱線</button></div></div>` : "";
+      `<button data-noise="aside" class="toggle${isAside ? " on" : ""}" aria-pressed="${isAside}" title="脱線として入れる">脱線</button>${land}</div></div>` : "";
     const row = document.createElement("div");
     row.className = "unit" + (use === "drop" ? " drop" : "");
     row.id = `unit-${u.id}`;
@@ -495,6 +501,8 @@ function renderUnits() {
       save("/api/design", { toggle_skip: { unit: u.id, on: !isSkip } }, true));
     row.querySelector("button[data-noise=aside]")?.addEventListener("click", () =>
       save("/api/design", { toggle_aside: { unit: u.id, on: !isAside } }, true));
+    row.querySelector("button[data-noise=land]")?.addEventListener("click", () =>
+      save("/api/design", { land: { [u.id]: isBare ? "author" : "bare" } }, true));
     box.appendChild(row);
   }
   if (!box.children.length) box.innerHTML = `<p class="note">該当する単位はありません。</p>`;
@@ -558,6 +566,8 @@ function renderDesign() {
     <h3>書く範囲</h3>
     ${area("avoid", "書かない話題", "1 行に 1 つ。下書きの依頼に話題の名前だけが載る", d.avoid.join("\n"))}
     ${area("research", "ウェブで調べること", "1 行に 1 つ、最大 5 つ。調査役には、この一覧と題・読者・ねらい・持ち帰りだけが渡る", d.research.join("\n"))}
+    <div class="field"><span class="label">一言（掘り下げる材料のうち、結果を運ぶもの）</span><p class="hint">${esc(L().note_question)}（${d.note_limit} 個まで）。一言を付けた単位は、解釈や感想をその一言の範囲で書く。付けない単位は、結果を述べたら意味づけを足さずに次へ進む</p>
+    <div id="notes">${noteItems(d).map((x) => `<div class="noise"><span class="refs">${refs([x.id])}</span><span class="tx">${esc(x.label)}</span><input data-note="${esc(x.id)}" aria-label="${esc(x.id)} への一言" placeholder="一言（無ければ空のまま）" value="${esc(x.note)}"></div>`).join("") || `<p class="note">なし。材料の「結果だけ」で足せます。</p>`}</div></div>
     <div class="field"><span class="label">説明しない前提</span><p class="hint">読者は知っているか、自分で調べる。1–3 個</p>
     <div id="skips">${d.skip.map((x, i) => `<div class="noise"><input data-skip="${i}" aria-label="前提の名前" value="${esc(x.label)}"><span class="refs">${x.units.map(esc).join(", ")}</span></div>`).join("") || `<p class="note">なし。材料の「前提扱い」で足せます。</p>`}</div></div>
     <div class="field"><span class="label">脱線</span><p class="hint">著者が出くわした場面に入れる。1–2 個</p>
@@ -582,10 +592,20 @@ function renderDesign() {
     d.skip[+el.dataset.skip].label = el.value;
     debounce("skip", () => save("/api/design", { skip: d.skip }, false));
   }));
+  box.querySelectorAll("input[data-note]").forEach((el) => el.addEventListener("input", () => {
+    debounce("note", () => save("/api/design", { notes: Object.fromEntries([...box.querySelectorAll("input[data-note]")].map((x) => [x.dataset.note, x.value])) }, false));
+  }));
   box.querySelectorAll("input[data-aside]").forEach((el) => el.addEventListener("input", () => {
     d.aside[+el.dataset.aside].where = el.value;
     debounce("aside", () => save("/api/design", { aside: d.aside }, false));
   }));
+}
+
+function noteItems(d) {
+  return d.units.filter((x) => unitById(x.id) && ((x.use === "deep" && x.land) || ((x.use === "deep" || x.use === "mention") && x.note.trim()))).map((x) => {
+    const t = unitById(x.id).text.replace(/\s+/g, " ").trim();
+    return { id: x.id, note: x.note, label: x.label || (t.length > 40 ? t.slice(0, 40) + "…" : t) };
+  });
 }
 
 function renderRules() {

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from .errors import StepError
 from .generate import DATA_NOTE_JA
 from .interview import strip_unit_refs, unit_lines
+from .land import propose_land
 from .llm import STR, arr, ask_json, enum, obj, rows, strings
 from .model import USES, Aside, Conflict, Design, Project, Rule, Skip, Unit, UnitUse
 from .terms import find_terms, promote_definitions
@@ -107,6 +108,7 @@ def design(wd: WorkDir, provider: Provider, judge: Provider, defaults: DesignDef
                              "chars_per_mention": defaults.chars_per_mention})
     d = propose_noise(d, p, units, baseline_text(wd), provider, defaults.skip_max, defaults.aside_max)
     d = promote_definitions(d.model_copy(update={"terms": find_terms(d, p, units, judge)}))
+    d = propose_land(d, p, units, judge)
     d = find_conflicts(d, p, units, provider)
     d = d.model_copy(update={"avoid": merge_avoid(defaults.avoid, d.avoid)})
     wd.save_design(d)
@@ -207,6 +209,13 @@ def noise_workdir(wd: WorkDir, provider: Provider, judge: Provider, skip_max: in
     d = propose_noise(old, p, units, baseline_text(wd), provider, skip_max, aside_max)
     d = d.model_copy(update={"terms": find_terms(d, p, units, judge)})
     d = find_conflicts(d, p, units, provider).model_copy(update={"avoid": old.avoid, "avoid_proposed": old.avoid_proposed})
+    wd.save_design(d)
+    return d
+
+
+def land_workdir(wd: WorkDir, judge: Provider) -> Design:
+    units = wd.units()
+    d = propose_land(sync_design(wd.design(), units), wd.project(), units, judge)
     wd.save_design(d)
     return d
 

@@ -18,6 +18,7 @@ from .draft import read_used
 from .errors import LLMError, StepError
 from .figures import figure_markers
 from .interview import SEARCHABLE_LABEL
+from .land import NOTE_QUESTION
 from .model import REGISTER_LABEL, USE_LABEL
 from .render import render
 from .review import (
@@ -49,7 +50,7 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 LABELS = {"searchable": SEARCHABLE_LABEL, "use": USE_LABEL, "decision": DECISION_LABEL, "kind": ITEM_KIND_LABEL,
-          "register": REGISTER_LABEL, "human_stages": list(ops.HUMAN_STAGES)}
+          "register": REGISTER_LABEL, "human_stages": list(ops.HUMAN_STAGES), "note_question": NOTE_QUESTION}
 
 
 class WriteApp:

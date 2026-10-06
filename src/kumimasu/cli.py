@@ -31,13 +31,14 @@ from .cli_common import (
 )
 from .config import Config
 from .design import design as run_design
-from .design import noise_workdir, review_conflicts, sync_design
+from .design import land_workdir, noise_workdir, review_conflicts, sync_design
 from .digest import digest as run_digest
 from .digest import digest_lines, reassess
 from .draft import draft as run_draft
 from .factcheck import check_urls
 from .files import private_dir
 from .interview import interview as run_interview
+from .land import note_items
 from .mark import mark as run_mark
 from .mark import mark_counts
 from .model import KINDS, USES, Design, Project
@@ -142,6 +143,8 @@ def _echo_design_notes(d: Design, units: list) -> None:
         typer.echo("avoid: " + " / ".join(d.avoid))
     for t in d.research:
         typer.echo(f"research: {t}")
+    for line in show.note_lines(note_items(d, units), d.note_limit):
+        typer.echo(line)
 
 
 @app.command()
@@ -170,6 +173,18 @@ def noise(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) ->
         d = noise_workdir(wd, cc.llm(cfg, "designer", provider), cc.llm(cfg, "judge", judge),
                           cfg.get("defaults.noise.skip_max"), cfg.get("defaults.noise.aside_max"))
     _echo_design_notes(d, wd.units())
+
+
+@app.command()
+def land(path: DirArg, judge: JudgeOpt = None) -> None:
+    """Mark the deep units that carry a result as bare (state the result, add no meaning) and every mention unit as bare;
+    units with the author's one word stay author. Then ask the author for one word on the listed units."""
+    wd = cc.workdir(path, "design", action="結果の着地の提案")
+    cfg = cc.config(path)
+    with errors():
+        d = land_workdir(wd, cc.llm(cfg, "judge", judge))
+    for line in show.note_lines(note_items(d, wd.units()), d.note_limit):
+        typer.echo(line)
 
 
 @app.command()

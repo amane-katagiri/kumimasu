@@ -66,8 +66,10 @@ kumimasu interview DIR     # providers.interviewer 1 回。4–6 個の質問
 ## 3. 設計（エージェント → 人）
 
 ```
-kumimasu design DIR        # providers.designer 3 回（提案・前提と脱線・見直し）＋ providers.judge 1 回以上（読者が知らない用語。材料 6 万字ごとに 1 回）
+kumimasu design DIR        # providers.designer 3 回（提案・前提と脱線・見直し）＋ providers.judge 2 回以上（読者が知らない用語。材料 6 万字ごとに 1 回／結果の単位の判定 1 回）
 ```
+
+設計を見てもらうときに、`show` の `[一言]` の質問も必ず本人に出す。掘り下げる単位のうち結果・観察・数字を運ぶものの一覧で、本人は「何か思ったものだけ一言」を答える（既定は 5 個まで。`set DIR note-limit N` で変えられる。無ければ飛ばしてよい）。一覧の単位の id・短い要約をそのまま見せ、答えは `kumimasu set DIR note ID "一言"` で入れる（画面なら設計の「一言」の欄）。一言を付けた単位は author（書き手は一言の判断を地の文の文体で言い切る 1 文にして置き、一言の後を意味づけで埋めない）、付けない結果の単位と触れる単位は bare（結果を述べたら意味づけを足さずに次へ進む）になる。結果でない単位に一言を付けてもよい。一言から書いた文は、検査と polish の削除系の検出から外れる。エージェントが一言を代わりに書くことはしない（auto でも空のまま）。
 
 本人に設計を見てもらう（画面か、チャットで `show` の内容を説明する）。`警告:` は「書かないにしたのに出てしまう内容」と、その原因になる使う単位（`原因:`）を示す。チャットでは、出る内容と原因の単位の中身を伝え、原因を書かないにするか、出てよいとするかを本人に決めてもらう。
 
@@ -84,12 +86,16 @@ kumimasu set DIR unit m12 --use deep|mention|drop
 kumimasu set DIR takeaway 2 "…" | takeaway add "…" | takeaway rm 2
 kumimasu set DIR purpose "…" | length 5000 | order "手がかり1" "手がかり2"
 kumimasu set DIR skip m5 on|off [--label "…"] | aside m42 on|off [--where "…"] | avoid add "…"
+kumimasu set DIR note m38 "一言" | note m38 ""   # 一言（付けると author、消すと bare）
+kumimasu set DIR land m40 bare|author            # 単位ごとの結果の着地（一言のある単位は bare にできない）
+kumimasu set DIR note-limit 6                    # 一言の上限（既定 5）
 kumimasu set DIR research add "…" | research rm N   # ウェブで調べること（調査役に渡る）
 kumimasu set DIR forms "比較は表"                   # 形の好み（設計と下書きの依頼に載る）
 kumimasu set DIR explain "用語"                     # その用語のいちばんよい説明の単位を触れるにする
 kumimasu rule DIR list | on N | off N | edit N "…" | add "…" | rm N
 kumimasu review DIR        # 使う単位を変えたら、書かないのに出てしまう内容と、読者が知らない用語の警告を作り直す（自動では足さない。使う単位と書かない話題はそのまま）
 kumimasu noise DIR         # 説明しない前提（skip）と脱線（aside）を提案し直す（ほかの use はそのまま）
+kumimasu land DIR          # 結果の単位を判定し直し、bare/author を付け直す（providers.judge 1 回。一言のある単位は author のまま）
 ```
 
 設計の「ウェブで調べること」（research）は、下書きの前の調査役にそのまま渡る一覧なので、本人に必ず見せる。調査役に渡るのは題・読者・ねらい・持ち帰り・この一覧だけで、材料と回答は渡らない。一覧に材料の文・私的な名前・未公開の事柄が入っていたら、本人に聞いて直す。

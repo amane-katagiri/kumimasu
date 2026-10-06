@@ -17,6 +17,7 @@ from .generate import DATA_NOTE_JA
 from .infounits import InfoUnit, as_info_units, info_units, units_block
 from .interview import unit_lines
 from .keep import KeepStore, text_hash
+from .land import from_notes, guarded, note_units
 from .llm import INT, STR, arr, ask_json, enum, obj, rows
 from .metadiscourse import split_sentences
 from .model import Design, Project, Unit
@@ -116,9 +117,12 @@ def map_schema() -> dict:
                skips=arr(obj(index=INT, explained=verdict, evidence=arr(INT))))
 
 
+def _numbered(items: list[str]) -> str:
+    return "\n".join(f"{i}. {t}" for i, t in enumerate(items, 1)) or "（なし）"
+
+
 def map_prompt(draft_units: list[InfoUnit], units: list[Unit], takeaways: list[str], skips: list[str] = ()) -> str:
-    return MAP_PROMPT_JA.format(takeaways="\n".join(f"{i}. {t}" for i, t in enumerate(takeaways, 1)) or "（なし）",
-                                skips="\n".join(f"{i}. {t}" for i, t in enumerate(skips, 1)) or "（なし）",
+    return MAP_PROMPT_JA.format(takeaways=_numbered(takeaways), skips=_numbered(skips),
                                 material=unit_lines(units, with_mark=False), draft=units_block(draft_units))
 
 
@@ -436,6 +440,7 @@ def check_length(chars: int, target: int) -> Check:
 def run_checks(name: str, draft: str, p: Project, units: list[Unit], d: Design, judge: Provider, meta: Provider | None,
                votes: Votes, keep: set[str], fetch: Fetch | None = None) -> CheckReport:
     d = sync_design(d, units)
+    units = [*units, *note_units(d, units)]
     infos, idmap = as_info_units(units)
     dunits = info_units(draft)
     skips = [x.label for x in d.skip]
@@ -445,7 +450,7 @@ def run_checks(name: str, draft: str, p: Project, units: list[Unit], d: Design, 
         cov = pool.submit(ask_json, judge, coverage_prompt(infos, {DRAFT: draft}), coverage_schema())
         mapped = pool.submit(ask_json, judge, map_prompt(dunits, units, d.takeaways, skips), map_schema())
         reader = pool.submit(ask_json, judge, reader_prompt(p, d, units, draft), reader_schema())
-        surface = pool.submit(surface_checks, draft, units, meta, votes, keep)
+        surface = pool.submit(surface_hits, draft, units, meta, votes)
         links = pool.submit(fetch, urls) if fetch is not None else None
         presence = {idmap[i]: c.v for i, c in parse_coverage(cov.result(), infos, [DRAFT]).items()}
         m = parse_map(mapped.result(), dunits, units, len(d.takeaways), len(skips))
@@ -453,7 +458,8 @@ def run_checks(name: str, draft: str, p: Project, units: list[Unit], d: Design, 
         checks = [check_drop_absent(f), check_deep_present(f), check_deep_space(f), check_firsthand(f),
                   check_takeaways(f), check_fabrication(f), check_numbers(draft, material),
                   check_links(urls, links.result() if links else None), check_skips(f), check_asides(f),
-                  *reader_checks(parse_reader(reader.result(), draft, units), p.audience), *surface.result(),
+                  *reader_checks(parse_reader(reader.result(), draft, units), p.audience),
+                  *surface_report_checks(draft, surface.result(), keep, noted_texts(dunits, m.sources)),
                   check_length(draft_chars(dunits), d.target_length)]
     return CheckReport(draft=name, chars=draft_chars(dunits), checks=checks, sources=m.sources,
                        figures=figure_markers(draft))
@@ -472,17 +478,28 @@ def surface_hits(draft: str, units: list[Unit], meta: Provider | None, votes: Vo
     return detect_surface(draft, meta, [u.text for u in units], votes.runs, votes.min_votes)
 
 
-def surface_checks(draft: str, units: list[Unit], meta: Provider | None, votes: Votes, keep: set[str]) -> list[Check]:
-    sr = surface_hits(draft, units, meta, votes)
-    kept = [h for h in sr.hits if text_hash(h.text) in keep]
+def noted_texts(dunits: list[InfoUnit], sources: dict) -> tuple[str, ...]:
+    return from_notes({str(du.id): du.text for du in dunits}, {str(k): v for k, v in sources.items()})
+
+
+def surface_checks(draft: str, units: list[Unit], meta: Provider | None, votes: Votes, keep: set[str],
+                   protect: tuple[str, ...] = ()) -> list[Check]:
+    return surface_report_checks(draft, surface_hits(draft, units, meta, votes), keep, protect)
+
+
+def surface_report_checks(draft: str, sr: SurfaceReport, keep: set[str], protect: tuple[str, ...]) -> list[Check]:
+    noted = [h for h in sr.hits if guarded(h.text, protect)]
+    held = [h for h in sr.hits if text_hash(h.text) in keep and h not in noted]
+    kept = held + noted
     meta_hits = [h for h in sr.hits if h.category not in (GLUE, CAVEAT, *FLOW) and h not in kept]
     flow_hits = [h for h in sr.hits if h.category in FLOW and h not in kept]
     caveat_hits = [h for h in sr.hits if h.category == CAVEAT and h not in kept]
     glue_hits = [h for h in sr.hits if h.category == GLUE and h not in kept]
     runs = sr.runs_used or None
     how = f"{runs} 回の判定の多数決" if runs else "規則だけ"
+    how += f"。著者の一言から来た文 {len(noted)} は数えない" if noted else ""
     out = [_c("meta", "メタ言説 → 無い", not meta_hits, len(meta_hits),
-              how + (f"。残すと決めた文 {len(kept)} は数えない" if kept else ""),
+              how + (f"。残すと決めた文 {len(held)} は数えない" if held else ""),
               [{"id": h.id, "category": h.category, "text": h.text, "votes": h.votes} for h in meta_hits], runs),
            _c("caveat", "結論の読み方を変えない保守的な但し書き → 無い", not caveat_hits, len(caveat_hits), how,
               [{"id": h.id, "text": h.text, "votes": h.votes} for h in caveat_hits], runs),
@@ -525,8 +542,10 @@ def check(wd: WorkDir, judge: Provider, meta: Provider | None, name: str, votes:
     text = wd.read(name)
     keep = KeepStore(wd).hashes()
     if surface_only:
+        full = fresh_report(wd, name, False)
+        protect = noted_texts(info_units(text), full.sources) if full else ()
         rep = CheckReport(draft=name, chars=draft_chars(info_units(text)),
-                          checks=surface_checks(text, wd.units(), meta, votes, keep), figures=figure_markers(text))
+                          checks=surface_checks(text, wd.units(), meta, votes, keep, protect), figures=figure_markers(text))
     else:
         rep = run_checks(name, text, wd.project(), wd.units(), wd.design(), judge, meta, votes, keep, fetch)
     stem = check_stem(name, surface_only)

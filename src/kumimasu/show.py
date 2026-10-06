@@ -4,6 +4,7 @@ from . import ops
 from .design import sync_design
 from .digest import digest_lines
 from .figures import figure_markers
+from .land import bare_names, note_items, note_question
 from .model import USE_LABEL, DigestState, Unit
 from .review import DECISION_LABEL, ReviewContext, final_name
 from .terms import material_load, term_states
@@ -49,6 +50,7 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
             "units": {use: [{"id": u.id, "text": _short(by[u.id].text, 40), "searchable": by[u.id].searchable or "answer"}
                             for u in d.units if u.use == use and u.id in by] for use in ("deep", "mention", "drop")},
             "skip": [s.model_dump() for s in d.skip], "aside": [a.model_dump() for a in d.aside],
+            "notes": note_items(d, units), "bare": bare_names(d, units), "note_limit": d.note_limit,
             "rules": [{"n": i, "on": r.on, "text": r.text} for i, r in enumerate(d.rules, 1)],
             "conflicts": [c.model_dump() | {"refs": _refs(c.by, by)} for c in d.live_conflicts()],
             "terms": term_states(d), "load": material_load(d, units),
@@ -67,6 +69,16 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
                                        if i.rewrite else None),
                            "stale": i.stale, "note_changed": i.note_changed, "by": i.source} for i in rev.items]}
     return snap
+
+
+def note_lines(items: list[dict], limit: int) -> list[str]:
+    if not items:
+        return []
+    have = sum(bool(i["note"]) for i in items)
+    out = [f"[一言] {note_question(limit)}（いま {have}/{limit}。答え: set DIR note ID \"…\"）"]
+    for i in items:
+        out.append(f"  {i['id']} [{i['land']}] {i['label']}" + (f"  一言: {i['note']}" if i["note"] else ""))
+    return out
 
 
 def term_lines(states: list[dict]) -> list[str]:
@@ -135,6 +147,9 @@ def text(snap: dict) -> str:
             lines += term_lines(d["terms"])
         lines += [f"説明しない前提: {s['label']} ({', '.join(s['units'])})" for s in d["skip"]]
         lines += [f"脱線: {a['id']} @ {a['where']}" for a in d["aside"]]
+        lines += note_lines(d["notes"], d["note_limit"])
+        if d["bare"]:
+            lines.append("結果だけ（bare）: " + " / ".join(d["bare"]))
         for c in d["conflicts"]:
             how = "出る" if c["level"] == "yes" else "一部出る"
             lines.append(f"警告: 「{c['note'] or '書かないにした内容'}」が{how}（書かない側: {c['id']}）")

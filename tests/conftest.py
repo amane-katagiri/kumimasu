@@ -132,6 +132,11 @@ def surface_fake(prompt: str) -> str:
 def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_ok: bool = True, deep_unit_chars: bool = True,
              skip_explained: bool = False, terms: list[dict] | None = None, reader: list[dict] | None = None):
     def respond(prompt: str) -> str:
+        if "掘り下げると決めた材料と著者の回答" in prompt:
+            return json.dumps({"units": [{"id": "m4", "result": "yes", "label": "LINE の写真に撮影日時が無い"},
+                                         {"id": "q1", "result": "yes", "label": "[q1] 意外だった"},
+                                         {"id": "m5", "result": "no", "label": "手順"},
+                                         {"id": "m2", "result": "yes", "label": "deep でない"}]})
         if "この読者が説明なしでは分からないもの" in prompt:
             return json.dumps({"terms": terms or []})
         if "この読者になりきって" in prompt:

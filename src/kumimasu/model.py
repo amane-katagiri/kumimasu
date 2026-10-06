@@ -7,9 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field
 Kind = Literal["実用", "読み物", "調査"]
 Searchable = Literal["yes", "partial", "no"]
 Use = Literal["deep", "mention", "drop"]
+Land = Literal["bare", "author"]
 
 KINDS: tuple[str, ...] = get_args(Kind)
 USES: tuple[str, ...] = get_args(Use)
+LANDS: tuple[str, ...] = get_args(Land)
 
 Stage = Literal["interview", "design", "drafting", "review", "done"]
 STAGES: tuple[str, ...] = get_args(Stage)
@@ -87,6 +89,9 @@ class UnitUse(BaseModel):
     use: Use
     why: str = ""
     promoted_for: str = ""
+    land: Land | None = None
+    label: str = ""
+    note: str = ""
 
 
 class Rule(BaseModel):
@@ -147,6 +152,7 @@ class Design(BaseModel):
     skip: list[Skip] = []
     aside: list[Aside] = []
     terms: list[Term] = []
+    note_limit: int = 5
     max_material_ratio: float = 2.0
     chars_per_mention: int = 150
 

@@ -14,7 +14,18 @@ from .draft import read_used
 from .errors import StepError
 from .figures import figure_markers
 from .files import append_jsonl, atomic_write, read_jsonl
-from .model import STAGES, USES, Aside, Design, Interview, Rule, Skip, Unit
+from .model import (
+    LANDS,
+    STAGES,
+    USES,
+    Aside,
+    Design,
+    Interview,
+    Rule,
+    Skip,
+    Unit,
+    UnitUse,
+)
 from .research import research_name
 from .review import (
     ApplyResult,
@@ -95,11 +106,14 @@ def answer(wd: WorkDir, qid: str, text: str, source: str) -> Interview:
 
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
     """The design edits of the page, as one body: purpose, takeaways, order, avoid, rules, skip, aside, target_length,
-    units ({id: use}), explain (a term whose best dropped explanation becomes mention). A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides."""
+    units ({id: use}), explain (a term whose best dropped explanation becomes mention), land ({id: bare|author}), notes
+    ({id: one word}), note_limit. A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides. A one word makes the
+    unit author and clearing it makes it bare; a unit that becomes mention without a land becomes bare."""
     with LOCK:
         require_stage(wd, "design", action="設計の変更")
         units = {u.id: u for u in wd.units()}
         d = sync_design(wd.design(), list(units.values()))
+        before = {u.id: u.use for u in d.units}
         upd: dict = {}
         for key in ("purpose", "form_prefs"):
             if key in body:
@@ -123,6 +137,10 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
                                          str(t.get("where") or ""))
         if "target_length" in body:
             upd["target_length"] = int(body["target_length"])
+        if "note_limit" in body:
+            if int(body["note_limit"]) < 1:
+                raise ValueError("note_limit は 1 以上にしてください")
+            upd["note_limit"] = int(body["note_limit"])
         uses = body.get("units") or {}
         if uses:
             unknown = set(uses) - {u.id for u in d.units}
@@ -139,10 +157,40 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
         d = d.model_copy(update={
             "skip": [x.model_copy(update={"units": [i for i in x.units if uses.get(i, "drop") == "drop"]}) for x in d.skip],
             "aside": [a for a in d.aside if uses.get(a.id) != "drop"]})
-        d = apply_noise(d)
+        d = with_land(apply_noise(d), body.get("notes") or {}, body.get("land") or {}, before)
         wd.save_design(d)
         record(wd, source, "design", keys=sorted(body))
         return d
+
+
+def with_land(d: Design, notes: dict, lands: dict, before: dict[str, str]) -> Design:
+    ids = set(d.unit_ids())
+    unknown = (set(notes) | set(lands)) - ids
+    if unknown:
+        raise ValueError(f"知らない単位です: {', '.join(sorted(unknown))}")
+    if any(v not in LANDS for v in lands.values()):
+        raise ValueError(f"land は {', '.join(LANDS)} のどれかにしてください")
+    aside = d.aside_ids()
+    out = []
+    for u in d.units:
+        if u.id in notes and (text := str(notes[u.id]).strip()) != u.note:
+            if text and u.use == "drop":
+                raise ValueError(f"{u.id} は書かない単位なので、一言を付けられません")
+            u = u.model_copy(update={"note": text, "land": "author" if text else "bare"})
+        if u.id in lands:
+            if lands[u.id] == "bare" and u.note.strip():
+                raise ValueError(f"{u.id} には一言があるので bare にできません（先に一言を消してください）")
+            u = u.model_copy(update={"land": lands[u.id]})
+        if u.use == "mention" and before.get(u.id) != "mention" and u.land is None and u.id not in aside:
+            u = u.model_copy(update={"land": "bare"})
+        out.append(u)
+    if sum(_has_note(u) for u in out) > d.note_limit:
+        raise ValueError(f"一言は {d.note_limit} 個までです（note_limit）")
+    return d.model_copy(update={"units": out})
+
+
+def _has_note(u: UnitUse) -> bool:
+    return u.use in ("deep", "mention") and bool(u.note.strip())
 
 
 def _known_unit(units: dict[str, Unit], unit_id) -> Unit:
@@ -357,7 +405,7 @@ WORK = {
                   "材料を読んで、材料からは分からないあなたの視点を聞く質問を作っています。"),
     "design": ("設計を提案する", "エージェントが設計を作っています",
                ("インタビューの答えと材料から、何を掘り下げ・何に触れ・何を書かないか、説明しない前提と脱線、"
-                "書かない話題を提案しています。")),
+                "書かない話題と、一言を聞く結果の単位を提案しています。")),
     "research": ("ウェブで調べる", "エージェントがウェブで調べています",
                  "設計の「ウェブで調べること」だけを調査役に渡して、出典付きの事実を集めています（材料と回答は渡しません）。"),
     "draft": ("下書きを書く", "エージェントが下書きを書いています",

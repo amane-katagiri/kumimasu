@@ -104,6 +104,6 @@ def revise(wd: WorkDir, writer: Provider, judge: Provider, meta: Provider | None
         return None, []
     prompt = revise_prompt(design_block(p, d, units), wd.read(src), todo, load_research(wd))
     wd.write(dst.replace(".md", ".prompt.md"), prompt)
-    write_used(wd, dst, d, d.drop_list, roles | {"writer": f"{writer.name}:{writer.model}"})
+    write_used(wd, dst, d, units, d.drop_list, roles | {"writer": f"{writer.name}:{writer.model}"})
     wd.write(dst, article_from(writer.complete(prompt)))
     return check(wd, judge, meta, dst, votes, fetch), todo
