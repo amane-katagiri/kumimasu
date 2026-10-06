@@ -57,6 +57,13 @@ SECURITY_HEADERS = {
 }
 PAGE_CSP = ("default-src 'self'; script-src 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+TOKEN_KEY = "kumimasu-token"
+PAGE_PATHS = ("/", "/index.html")
+NO_TOKEN = "kumimasu serve が表示した URL（token 付き）を開いてください"
+# The page drops the token from the address bar and keeps it in this tab's sessionStorage, so a reload lands here.
+RELOAD_PAGE = ('<!doctype html><meta charset="utf-8"><title>kumimasu</title><p>' + NO_TOKEN + '</p>'
+               '<script nonce="{{KUMIMASU_NONCE}}">try { const t = sessionStorage.getItem("' + TOKEN_KEY + '"); '
+               'if (t) location.replace("/?token=" + encodeURIComponent(t)); } catch (e) {}</script>').encode()
 LABELS = {"searchable": SEARCHABLE_LABEL, "use": USE_LABEL, "decision": DECISION_LABEL, "kind": ITEM_KIND_LABEL,
           "register": REGISTER_LABEL, "human_stages": list(ops.HUMAN_STAGES), "note_question": NOTE_QUESTION}
 
@@ -70,6 +77,11 @@ class HttpError(Exception):
 class NotFound(HttpError):
     def __init__(self) -> None:
         super().__init__(404, "見つかりません")
+
+
+class NoToken(HttpError):
+    def __init__(self) -> None:
+        super().__init__(403, NO_TOKEN)
 
 
 class Stale(HttpError):
@@ -286,6 +298,11 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
         def _json(self, data, code: int = 200, headers: dict | None = None) -> None:
             self._send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8", headers)
 
+        def _page(self, code: int, html: bytes) -> None:
+            nonce = secrets.token_urlsafe(16)
+            self._send(code, html.replace(NONCE_SLOT, nonce.encode()), "text/html; charset=utf-8",
+                       {"Content-Security-Policy": PAGE_CSP.format(nonce=nonce)})
+
         def _check(self, path: str, query: str) -> None:
             port = self.server.server_address[1]
             hosts = {f"{HOST}:{port}", f"localhost:{port}"}
@@ -299,8 +316,10 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
                     raise HttpError(403, "別のオリジンからの要求は受けません")
                 if not secrets.compare_digest(self.headers.get(TOKEN_HEADER, "").encode(), token_bytes):
                     raise HttpError(403, "トークンがありません")
-            elif not secrets.compare_digest(parse_qs(query).get("token", [""])[0].encode(), token_bytes):
-                raise HttpError(403, "kumimasu serve が表示した URL（token 付き）を開いてください")
+            elif "token" not in (q := parse_qs(query)) and path in PAGE_PATHS:
+                raise NoToken
+            elif not secrets.compare_digest(q.get("token", [""])[0].encode(), token_bytes):
+                raise HttpError(403, NO_TOKEN)
 
         def _body(self) -> dict:
             if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
@@ -322,10 +341,8 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
             return data
 
         def _route(self, method: str, path: str) -> None:
-            if method == "GET" and path in ("/", "/index.html"):
-                nonce = secrets.token_urlsafe(16)
-                self._send(200, page.replace(NONCE_SLOT, nonce.encode()), "text/html; charset=utf-8",
-                           {"Content-Security-Policy": PAGE_CSP.format(nonce=nonce)})
+            if method == "GET" and path in PAGE_PATHS:
+                self._page(200, page)
                 return
             if method == "GET" and path == "/api/version":
                 v = ops.version(app.wd)
@@ -362,6 +379,8 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
             try:
                 self._check(url.path, url.query)
                 self._route(method, url.path)
+            except NoToken:
+                self._page(403, RELOAD_PAGE)
             except HttpError as e:
                 self._json({"error": str(e)} | ({"stale": True} if isinstance(e, Stale) else {}), e.code)
             except StepError as e:

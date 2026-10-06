@@ -439,6 +439,10 @@ def test_server_page_needs_the_url_token_and_runs_only_its_nonce_script(wd):
         for path in ("/", "/index.html", "/?token=wrong", "/?token="):
             code, body, _ = c.request(path, token=None)
             assert code == 403 and "test-token" not in json.dumps(body)
+        code, body, headers = c.request("/", token=None)
+        nonce = re.search(r"script-src 'nonce-([\w-]+)'", headers["Content-Security-Policy"])[1]
+        assert f'<script nonce="{nonce}">' in body and 'sessionStorage.getItem("kumimasu-token")' in body
+        assert "sessionStorage" not in json.dumps(c.request("/?token=wrong", token=None)[1])
         assert c.request("/", headers={"X-Kumimasu-Token": "test-token"})[0] == 403
         code, page, headers = c.page()
         csp = headers["Content-Security-Policy"]

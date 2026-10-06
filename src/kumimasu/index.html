@@ -803,6 +803,8 @@ function adopt(r) {
 }
 
 async function boot() {
+  try { sessionStorage.setItem("kumimasu-token", TOKEN); } catch (e) { /* a reload then asks for the URL again */ }
+  history.replaceState(null, "", location.pathname);
   try {
     adopt(await api("/api/state"));
   } catch (e) { status("読み込めません: " + e.message, true); return; }
