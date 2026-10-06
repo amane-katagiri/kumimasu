@@ -592,7 +592,7 @@ function renderDesign() {
   box.innerHTML = `<h2>設計</h2>
     ${area("purpose", "ねらい", "", d.purpose)}
     ${area("takeaways", "読者が持ち帰るもの", "1 行に 1 つ、最大 3 つ", d.takeaways.join("\n"))}
-    ${field("target_length", "目標の字数", "", `<div class="length"><input type="number" id="target_length" min="500" step="100" value="${esc(d.target_length)}"><div class="counts" id="counts"></div></div><div id="load"></div>`)}
+    ${field("target_length", "目標の字数", "", `<div class="length"><input type="number" id="target_length" min="300" max="100000" step="100" value="${esc(d.target_length)}"><div class="counts" id="counts"></div></div><div id="load"></div>`)}
     <h3>組み立て</h3>
     ${area("order", "順番の手がかり", "1 行に 1 つ", d.order.join("\n"))}
     ${area("forms", "形", "1 行に 1 つ。書き手は必ず使う。ほかの所にも、詰まった比較や手順なら表やリストを足せる", d.forms.join("\n"))}

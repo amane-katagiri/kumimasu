@@ -73,6 +73,13 @@ class Stale(HttpError):
         super().__init__(409, "ほかの所（エージェントや別のタブ）で先に変更されています")
 
 
+def text_field(body: dict, key: str) -> str:
+    value = body.get(key, "")
+    if not isinstance(value, str):
+        raise TypeError(f"{key} は文字列にしてください")
+    return value
+
+
 class WriteApp:
     def __init__(self, wd: WorkDir, rewriter: Callable[[], Provider] | None, poll_seconds: float,
                  judge: Callable[[], Provider] | None = None) -> None:
@@ -144,14 +151,14 @@ class WriteApp:
         return {"result": res.model_dump(), "review": self._review(after, with_html=False), "final": self._final(after)}
 
     def confirm(self, body: dict) -> dict:
-        handoff = ops.confirm(self.wd, SOURCE, str(body.get("note", "")), self.rewriter)
+        handoff = ops.confirm(self.wd, SOURCE, text_field(body, "note"), self.rewriter)
         return {"handoff": handoff} | self.state()
 
     def restart(self, body: dict) -> dict:
         from_stage, mode = body.get("from"), body.get("mode")
         if not isinstance(from_stage, str) or not isinstance(mode, str):
             raise TypeError("from と mode は文字列にしてください")
-        event = ops.restart(self.wd, from_stage, SOURCE, mode, str(body.get("note", "")))
+        event = ops.restart(self.wd, from_stage, SOURCE, mode, text_field(body, "note"))
         return {"restart": event} | self.state()
 
     def version(self) -> str:

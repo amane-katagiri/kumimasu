@@ -31,6 +31,9 @@ class DigestState(BaseModel):
     calls: int = 0
 
 
+LENGTH_MIN, LENGTH_MAX = 300, 100_000
+
+
 class Project(BaseModel):
     topic: str
     audience: str

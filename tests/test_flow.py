@@ -449,10 +449,25 @@ def test_server_rejects_ill_typed_bodies_without_writing(wd):
     before = wd.design_file.read_text(encoding="utf-8")
     with serving(wd) as c:
         for body in ({"takeaways": "abc"}, {"units": ["m1"]}, {"notes": {"m1": ["x"]}}, {"purpose": 1},
-                     {"toggle_skip": {"on": True}}, {"surprise": 1}, {"target_length": "many"}):
+                     {"toggle_skip": {"on": True}}, {"surprise": 1}, {"target_length": "many"}, {"target_length": 0},
+                     {"target_length": -5}, {"target_length": 10**9}, {"takeaways": ["a", "b", "c", "d"]}):
             code, err = c.put("/api/design", body)
             assert code == 400 and "error" in err, body
     assert wd.design_file.read_text(encoding="utf-8") == before
+    with serving(wd) as c:
+        for path, body in (("/api/confirm", {"note": None}), ("/api/confirm", {"note": 3}),
+                           ("/api/restart", {"from": "interview", "mode": "keep", "note": None})):
+            code, err = c.post(path, body)
+            assert code == 400 and "文字列" in err["error"], body
+    assert ops.stage(wd) == "design"
+
+
+def test_server_rejects_non_string_answers(wd):
+    with serving(wd) as c:
+        for value in (None, 3, ["x"]):
+            code, err = c.put("/api/interview", {"answers": {"q1": value}})
+            assert code == 400 and "文字列" in err["error"]
+    assert wd.interview().questions[0].answer == ""
 
 
 def test_cli_auto_prints_warning(wd, monkeypatch):

@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
 
 from .check import check_stem
-from .design import RESEARCH_CHARS, RESEARCH_MAX, apply_noise, sync_design
+from .design import (
+    RESEARCH_CHARS,
+    RESEARCH_MAX,
+    TAKEAWAYS_MAX,
+    apply_noise,
+    sync_design,
+)
 from .draft import read_used
 from .errors import StepError
 from .figures import figure_markers
@@ -19,6 +25,8 @@ from .files import append_jsonl, atomic_write, read_jsonl
 from .land import propose_followups, with_answer
 from .model import (
     LANDS,
+    LENGTH_MAX,
+    LENGTH_MIN,
     STAGES,
     USES,
     Aside,
@@ -93,9 +101,11 @@ def save_answers(wd: WorkDir, answers: dict, source: str) -> Interview:
         unknown = set(answers) - set(by_id)
         if unknown:
             raise ValueError(f"知らない質問です: {', '.join(sorted(unknown))}")
-        changed = [qid for qid, text in answers.items() if by_id[qid].answer != str(text)]
+        if not all(isinstance(text, str) for text in answers.values()):
+            raise ValueError("答えは文字列にしてください")
+        changed = [qid for qid, text in answers.items() if by_id[qid].answer != text]
         for qid in changed:
-            by_id[qid].answer, by_id[qid].source = str(answers[qid]), source
+            by_id[qid].answer, by_id[qid].source = answers[qid], source
         if changed:
             wd.save_interview(iv)
             for qid in changed:
@@ -158,6 +168,10 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
         for key in ("takeaways", "order", "avoid", "research", "forms"):
             if (xs := getattr(edit, key)) is not None:
                 upd[key] = [x.strip() for x in xs if x.strip()]
+        if len(upd.get("takeaways", [])) > TAKEAWAYS_MAX:
+            raise ValueError(f"持ち帰りは {TAKEAWAYS_MAX} 個までです")
+        if edit.target_length is not None and not LENGTH_MIN <= edit.target_length <= LENGTH_MAX:
+            raise ValueError(f"目標の字数は {LENGTH_MIN} 以上 {LENGTH_MAX} 以下にしてください")
         if len(upd.get("research", [])) > RESEARCH_MAX or any(len(x) > RESEARCH_CHARS for x in upd.get("research", [])):
             raise ValueError(f"調べることは {RESEARCH_MAX} 個まで、それぞれ {RESEARCH_CHARS} 字までです")
         if (t := edit.toggle_skip) is not None:

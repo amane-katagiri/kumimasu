@@ -41,7 +41,7 @@ from .interview import interview as run_interview
 from .land import note_items
 from .mark import mark as run_mark
 from .mark import mark_counts
-from .model import KINDS, USES, Design, Project
+from .model import KINDS, LENGTH_MAX, LENGTH_MIN, USES, Design, Project
 from .polish import POLISH_RULES
 from .polish import polish as run_polish
 from .research import Research, load_research, research_name
@@ -61,7 +61,7 @@ def init(path: DirArg,
          material: Annotated[list[Path] | None, typer.Option("--material", "-m", exists=True, dir_okay=False,
                                                              help="Notes, logs, code or link lists (repeatable)")] = None,
          kind: Annotated[str, typer.Option("--kind", help="実用 | 読み物 | 調査")] = "実用",
-         length: Annotated[int, typer.Option("--length", min=300)] = 4000) -> None:
+         length: Annotated[int, typer.Option("--length", min=LENGTH_MIN, max=LENGTH_MAX)] = 4000) -> None:
     """Copy the material into DIR and split it into material units (units.yaml)."""
     if kind not in KINDS:
         raise typer.BadParameter(f"--kind は {' | '.join(KINDS)} のどれかにしてください")

@@ -13,7 +13,6 @@ from . import ops
 from . import prefs as pf
 from .cli_common import DirArg, DraftOpt, RewriterOpt, SourceOpt, app, errors
 from .config import PROJECT_FILE, init_template, user_path
-from .design import TAKEAWAYS_MAX
 from .model import STAGES
 from .review import Decision
 from .show import snapshot, text
@@ -73,8 +72,6 @@ def _design_body(wd, what: str, a: list[str], use: str | None, label: str, where
                 cur[pf.list_index(a[0], len(cur))] = a[1]
             else:
                 raise ValueError(f"使い方: set DIR {what} add TEXT | rm N" + (" | N TEXT" if what == "takeaway" else ""))
-            if what == "takeaway" and len(cur) > TAKEAWAYS_MAX:
-                raise ValueError(f"持ち帰りは {TAKEAWAYS_MAX} 個までです")
             return {key: cur}
         case "explain":
             if len(a) != 1:
