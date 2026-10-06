@@ -149,6 +149,7 @@ main { flex: 1; }
 .noise input { flex: 1; min-width: 0; padding: 4px 8px; }
 .noise .tx { flex: 0 1 auto; max-width: 55%; min-width: 0; color: var(--ink-3); font-size: var(--t-s); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toggle:disabled { opacity: .55; }
+.noise.followup { padding-left: var(--s3); }
 .conflicts { list-style: none; margin: var(--s2) 0 0; padding: 0; }
 .conflicts li { padding: var(--s2) 0 var(--s2) var(--s3); border-left: 2px solid var(--ochre); margin-bottom: var(--s2); }
 .conflicts .what { overflow-wrap: anywhere; }
@@ -567,7 +568,8 @@ function renderDesign() {
     ${area("avoid", "書かない話題", "1 行に 1 つ。下書きの依頼に話題の名前だけが載る", d.avoid.join("\n"))}
     ${area("research", "ウェブで調べること", "1 行に 1 つ、最大 5 つ。調査役には、この一覧と題・読者・ねらい・持ち帰りだけが渡る", d.research.join("\n"))}
     <div class="field"><span class="label">一言（掘り下げる材料のうち、結果を運ぶもの）</span><p class="hint">${esc(L().note_question)}（${d.note_limit} 個まで）。一言を付けた単位は、解釈や感想をその一言の範囲で書く。付けない単位は、結果を述べたら意味づけを足さずに次へ進む</p>
-    <div id="notes">${noteItems(d).map((x) => `<div class="noise"><span class="refs">${refs([x.id])}</span><span class="tx">${esc(x.label)}</span><input data-note="${esc(x.id)}" aria-label="${esc(x.id)} への一言" placeholder="一言（無ければ空のまま）" value="${esc(x.note)}"></div>`).join("") || `<p class="note">なし。材料の「結果だけ」で足せます。</p>`}</div></div>
+    <div id="notes">${noteItems(d).map((x) => `<div class="noise"><span class="refs">${refs([x.id])}</span><span class="tx">${esc(x.label)}</span><input data-note="${esc(x.id)}" aria-label="${esc(x.id)} への一言" placeholder="一言（無ければ空のまま）" value="${esc(x.note)}"></div>${followupHtml(x)}`).join("") || `<p class="note">なし。材料の「結果だけ」で足せます。</p>`}</div>
+    ${noteItems(d).some((x) => x.note.trim()) ? `<div class="noise"><button type="button" class="btn" id="followup">薄い一言を聞き返す</button><span class="hint">一言が評価だけのものに、なぜ・具体的にはを最大 ${d.followup_limit} 個聞きます（LLM を 1 回呼びます）。答えは一言の後ろに足されます。飛ばしてもかまいません</span></div>` : ""}</div>
     <div class="field"><span class="label">説明しない前提</span><p class="hint">読者は知っているか、自分で調べる。1–3 個</p>
     <div id="skips">${d.skip.map((x, i) => `<div class="noise"><input data-skip="${i}" aria-label="前提の名前" value="${esc(x.label)}"><span class="refs">${x.units.map(esc).join(", ")}</span></div>`).join("") || `<p class="note">なし。材料の「前提扱い」で足せます。</p>`}</div></div>
     <div class="field"><span class="label">脱線</span><p class="hint">著者が出くわした場面に入れる。1–2 個</p>
@@ -592,6 +594,15 @@ function renderDesign() {
     d.skip[+el.dataset.skip].label = el.value;
     debounce("skip", () => save("/api/design", { skip: d.skip }, false));
   }));
+  $("#followup")?.addEventListener("click", async () => {
+    status("聞き返しを考えています…");
+    try { S.data = await api("/api/followup", { method: "POST", body: {} }); S.version = S.data.version; status("保存しました"); renderUnits(); renderDesign(); }
+    catch (e) { status("聞き返せません: " + e.message, true); }
+  });
+  box.querySelectorAll("input[data-followup]").forEach((el) => el.addEventListener("change", () =>
+    save("/api/design", { followups: { [el.dataset.followup]: el.value } }, true)));
+  box.querySelectorAll("button[data-followup-skip]").forEach((el) => el.addEventListener("click", () =>
+    save("/api/design", { followups: { [el.dataset.followupSkip]: "" } }, true)));
   box.querySelectorAll("input[data-note]").forEach((el) => el.addEventListener("input", () => {
     debounce("note", () => save("/api/design", { notes: Object.fromEntries([...box.querySelectorAll("input[data-note]")].map((x) => [x.dataset.note, x.value])) }, false));
   }));
@@ -601,10 +612,20 @@ function renderDesign() {
   }));
 }
 
+const FOLLOWUP_DONE = { answered: "答えた", skipped: "飛ばした" };
+
+function followupHtml(x) {
+  if (!x.followup) return "";
+  if (x.followup_state === "asked") {
+    return `<div class="noise followup"><span class="tx" title="${esc(x.followup)}">${esc(x.followup)}</span><input data-followup="${esc(x.id)}" aria-label="${esc(x.id)} の聞き返しへの答え" placeholder="答え（一言の後ろに足されます。欄を離れると保存）"><button type="button" class="btn quiet" data-followup-skip="${esc(x.id)}">飛ばす</button></div>`;
+  }
+  return FOLLOWUP_DONE[x.followup_state] ? `<div class="noise followup"><span class="tx">${esc(x.followup)}（${FOLLOWUP_DONE[x.followup_state]}）</span></div>` : "";
+}
+
 function noteItems(d) {
   return d.units.filter((x) => unitById(x.id) && ((x.use === "deep" && x.land) || ((x.use === "deep" || x.use === "mention") && x.note.trim()))).map((x) => {
     const t = unitById(x.id).text.replace(/\s+/g, " ").trim();
-    return { id: x.id, note: x.note, label: x.label || (t.length > 40 ? t.slice(0, 40) + "…" : t) };
+    return { id: x.id, note: x.note, followup: x.followup, followup_state: x.followup_state, label: x.label || (t.length > 40 ? t.slice(0, 40) + "…" : t) };
   });
 }
 

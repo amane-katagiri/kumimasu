@@ -14,6 +14,7 @@ from .draft import read_used
 from .errors import StepError
 from .figures import figure_markers
 from .files import append_jsonl, atomic_write, read_jsonl
+from .land import propose_followups, with_answer
 from .model import (
     LANDS,
     STAGES,
@@ -107,7 +108,7 @@ def answer(wd: WorkDir, qid: str, text: str, source: str) -> Interview:
 def update_design(wd: WorkDir, body: dict, source: str) -> Design:
     """The design edits of the page, as one body: purpose, takeaways, order, avoid, rules, skip, aside, target_length,
     units ({id: use}), explain (a term whose best dropped explanation becomes mention), land ({id: bare|author}), notes
-    ({id: one word}), note_limit. A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides. A one word makes the
+    ({id: one word}), note_limit, followups ({id: answer; "" skips}), followup_limit. A unit set to a non-drop use leaves its skip; a unit set to drop leaves the asides. A one word makes the
     unit author and clearing it makes it bare; a unit that becomes mention without a land becomes bare."""
     with LOCK:
         require_stage(wd, "design", action="設計の変更")
@@ -137,6 +138,10 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
                                          str(t.get("where") or ""))
         if "target_length" in body:
             upd["target_length"] = int(body["target_length"])
+        if "followup_limit" in body:
+            if int(body["followup_limit"]) < 0:
+                raise ValueError("followup_limit は 0 以上にしてください")
+            upd["followup_limit"] = int(body["followup_limit"])
         if "note_limit" in body:
             if int(body["note_limit"]) < 1:
                 raise ValueError("note_limit は 1 以上にしてください")
@@ -157,7 +162,8 @@ def update_design(wd: WorkDir, body: dict, source: str) -> Design:
         d = d.model_copy(update={
             "skip": [x.model_copy(update={"units": [i for i in x.units if uses.get(i, "drop") == "drop"]}) for x in d.skip],
             "aside": [a for a in d.aside if uses.get(a.id) != "drop"]})
-        d = with_land(apply_noise(d), body.get("notes") or {}, body.get("land") or {}, before)
+        d = with_followups(with_land(apply_noise(d), body.get("notes") or {}, body.get("land") or {}, before),
+                           body.get("followups") or {})
         wd.save_design(d)
         record(wd, source, "design", keys=sorted(body))
         return d
@@ -176,7 +182,8 @@ def with_land(d: Design, notes: dict, lands: dict, before: dict[str, str]) -> De
         if u.id in notes and (text := str(notes[u.id]).strip()) != u.note:
             if text and u.use == "drop":
                 raise ValueError(f"{u.id} は書かない単位なので、一言を付けられません")
-            u = u.model_copy(update={"note": text, "land": "author" if text else "bare"})
+            u = u.model_copy(update={"note": text, "land": "author" if text else "bare", "followup": "",
+                                     "followup_state": None})
         if u.id in lands:
             if lands[u.id] == "bare" and u.note.strip():
                 raise ValueError(f"{u.id} には一言があるので bare にできません（先に一言を消してください）")
@@ -187,6 +194,32 @@ def with_land(d: Design, notes: dict, lands: dict, before: dict[str, str]) -> De
     if sum(_has_note(u) for u in out) > d.note_limit:
         raise ValueError(f"一言は {d.note_limit} 個までです（note_limit）")
     return d.model_copy(update={"units": out})
+
+
+def with_followups(d: Design, answers: dict) -> Design:
+    asked = {u.id for u in d.units if u.followup_state == "asked"}
+    unknown = set(answers) - asked
+    if unknown:
+        raise ValueError(f"聞き返していない単位です: {', '.join(sorted(unknown))}")
+    out = []
+    for u in d.units:
+        if u.id in answers:
+            text = str(answers[u.id]).strip()
+            u = u.model_copy(update={"note": with_answer(u.note, text), "followup_state": "answered"} if text
+                             else {"followup_state": "skipped"})
+        out.append(u)
+    return d.model_copy(update={"units": out})
+
+
+def followup(wd: WorkDir, provider: Provider, source: str) -> Design:
+    with LOCK:
+        require_stage(wd, "design", action="一言の聞き返し")
+        units = wd.units()
+        d, calls = propose_followups(sync_design(wd.design(), units), wd.project(), units, provider)
+        if calls:
+            wd.save_design(d)
+        record(wd, source, "followup", calls=calls, asked=[u.id for u in d.units if u.followup_state == "asked"])
+        return d
 
 
 def _has_note(u: UnitUse) -> bool:

@@ -188,6 +188,18 @@ def land(path: DirArg, judge: JudgeOpt = None) -> None:
 
 
 @app.command()
+def followup(path: DirArg, judge: JudgeOpt = None) -> None:
+    """Find thin one words (a judgement with no what/why/example) and ask a follow-up question on up to followup_limit
+    of them, front and back halves of the material in turn. Plain reactions are not asked again."""
+    wd = cc.workdir(path, "design", action="一言の聞き返し")
+    cfg = cc.config(path)
+    with errors():
+        d = ops.followup(wd, cc.llm(cfg, "judge", judge), "agent")
+    for line in show.note_lines(note_items(d, wd.units()), d.note_limit):
+        typer.echo(line)
+
+
+@app.command()
 def review(path: DirArg, provider: ProviderOpt = None, judge: JudgeOpt = None) -> None:
     """Recompute, for the current design, which drop units the kept units would bring in anyway and the terms the reader
     may not know (warnings only; uses and avoid topics are left as they are)."""
@@ -205,7 +217,8 @@ def serve(path: DirArg, port: Annotated[int | None, typer.Option("--port", help=
     Edits autosave to the YAML files."""
     wd = cc.workdir(path)
     cfg = cc.config(path)
-    run_server(WriteApp(wd, lambda: cc.llm(cfg, "rewriter", rewriter), cfg.get("serve.poll_seconds")),
+    run_server(WriteApp(wd, lambda: cc.llm(cfg, "rewriter", rewriter), cfg.get("serve.poll_seconds"),
+                        lambda: cc.llm(cfg, "judge")),
                cfg.resolve("serve.port", port))
 
 

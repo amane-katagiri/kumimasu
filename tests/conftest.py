@@ -61,8 +61,8 @@ class Client:
 
 
 @contextmanager
-def serving(wd, rewriter=None):
-    server = make_server(WriteApp(wd, rewriter, 3), 0, TOKEN)
+def serving(wd, rewriter=None, judge=None):
+    server = make_server(WriteApp(wd, rewriter, 3, judge), 0, TOKEN)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield Client(f"http://127.0.0.1:{server.server_address[1]}")
@@ -132,6 +132,11 @@ def surface_fake(prompt: str) -> str:
 def scripted(draft_text: str = GOOD_DRAFT, present_drop: bool = False, takeaway_ok: bool = True, deep_unit_chars: bool = True,
              skip_explained: bool = False, terms: list[dict] | None = None, reader: list[dict] | None = None):
     def respond(prompt: str) -> str:
+        if "著者が材料（番号付きの単位）に付けた一言です" in prompt:
+            ids = re.findall(r"^\[([mq]\d+)\] 材料:", prompt, re.MULTILINE)
+            notes = dict(re.findall(r"^\[([mq]\d+)\] 材料:.*?\n一言: (.*)$", prompt, re.MULTILINE))
+            return json.dumps({"notes": [{"id": i, "thin": "yes" if "面白い" in notes.get(i, "") else "no",
+                                          "question": f"[{i}] {notes.get(i, '')[:4]}って、どのへんが？"} for i in ids]})
         if "掘り下げると決めた材料と著者の回答" in prompt:
             return json.dumps({"units": [{"id": "m4", "result": "yes", "label": "LINE の写真に撮影日時が無い"},
                                          {"id": "q1", "result": "yes", "label": "[q1] 意外だった"},

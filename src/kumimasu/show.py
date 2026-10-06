@@ -71,6 +71,9 @@ def snapshot(wd: WorkDir, stage: str | None = None) -> dict:
     return snap
 
 
+FOLLOWUP_LABEL = {"asked": "答え待ち", "answered": "答えた", "skipped": "飛ばした"}
+
+
 def note_lines(items: list[dict], limit: int) -> list[str]:
     if not items:
         return []
@@ -78,6 +81,9 @@ def note_lines(items: list[dict], limit: int) -> list[str]:
     out = [f"[一言] {note_question(limit)}（いま {have}/{limit}。答え: set DIR note ID \"…\"）"]
     for i in items:
         out.append(f"  {i['id']} [{i['land']}] {i['label']}" + (f"  一言: {i['note']}" if i["note"] else ""))
+        if i.get("followup") and i["followup_state"] in FOLLOWUP_LABEL:
+            out.append(f"      聞き返し（{FOLLOWUP_LABEL[i['followup_state']]}）: {i['followup']}"
+                       + ("  答え: set DIR followup ID \"…\"（飛ばすなら \"\"）" if i["followup_state"] == "asked" else ""))
     return out
 
 

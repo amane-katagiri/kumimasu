@@ -8,6 +8,7 @@ Kind = Literal["実用", "読み物", "調査"]
 Searchable = Literal["yes", "partial", "no"]
 Use = Literal["deep", "mention", "drop"]
 Land = Literal["bare", "author"]
+FollowupState = Literal["asked", "answered", "skipped", "none"]
 
 KINDS: tuple[str, ...] = get_args(Kind)
 USES: tuple[str, ...] = get_args(Use)
@@ -92,6 +93,8 @@ class UnitUse(BaseModel):
     land: Land | None = None
     label: str = ""
     note: str = ""
+    followup: str = ""
+    followup_state: FollowupState | None = None
 
 
 class Rule(BaseModel):
@@ -153,6 +156,7 @@ class Design(BaseModel):
     aside: list[Aside] = []
     terms: list[Term] = []
     note_limit: int = 5
+    followup_limit: int = 2
     max_material_ratio: float = 2.0
     chars_per_mention: int = 150
 

@@ -99,7 +99,8 @@ def bare_names(d: Design, units: list[Unit]) -> list[str]:
 
 def note_items(d: Design, units: list[Unit]) -> list[dict]:
     by_id = {u.id: u for u in units}
-    return [{"id": x.id, "label": x.label or excerpt(by_id[x.id].text, 40, ellipsis=True), "land": x.land, "note": x.note}
+    return [{"id": x.id, "label": x.label or excerpt(by_id[x.id].text, 40, ellipsis=True), "land": x.land, "note": x.note,
+             "followup": x.followup, "followup_state": x.followup_state}
             for x in d.units if x.id in by_id and ((x.use == "deep" and x.land is not None)
                                                    or (x.use in ("deep", "mention") and x.note.strip()))]
 
@@ -117,4 +118,75 @@ def from_notes(texts_by_id: dict[str, str], sources: dict) -> tuple[str, ...]:
 def guarded(text: str, protect: tuple[str, ...]) -> bool:
     t = norm(text)
     return bool(t) and any(t in p for p in protect)
+
+
+FOLLOWUP_PROMPT_JA = DATA_NOTE_JA + """
+
+著者が「{topic}」について記事を書きます（読者: {audience}）。下は、著者が材料（番号付きの単位）に付けた一言です。
+
+一言ごとに答えてください。
+- thin: 一言が評価や判断の言葉だけで、何が・なぜ・具体的にはどうなのかが書かれていなければ yes。ぼやきや素直な反応（「ちゃんとしてくれ～」「新鮮だった」のようなもの）は、掘ると説明っぽくなるので no。理由や具体をすでに含む一言も no。
+- question: thin が yes のとき、著者に聞き返す質問を 1 つ。一言の言葉を使い、なぜそう思ったか、または具体的には何かを、くだけた短い問い（30 字くらいまで）で聞きます（例: 「ハックっぽいって、どのへんが？」）。番号は書きません。答えの候補は並べません。thin が no なら空にします。
+
+# 一言
+
+{notes}"""
+FOLLOWUP_SHOWN = 300
+
+
+def followup_schema() -> dict:
+    return obj(notes=arr(obj(id=STR, thin=enum("yes", "no"), question=STR)))
+
+
+def followup_prompt(p: Project, pairs: list[tuple[UnitUse, Unit]]) -> str:
+    notes = "\n\n".join(f"[{u.id}] 材料: {excerpt(u.text, FOLLOWUP_SHOWN, ellipsis=True)}\n一言: {x.note.strip()}" for x, u in pairs)
+    return FOLLOWUP_PROMPT_JA.format(topic=p.topic, audience=p.audience, notes=notes)
+
+
+def parse_followups(data: dict, ids: set[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for row in rows(data, "notes"):
+        uid = row.get("id")
+        if uid in ids and uid not in out:
+            q = strip_unit_refs(str(row.get("question", "")), ids).strip()
+            out[uid] = q if row.get("thin") == "yes" else ""
+    return out
+
+
+def spread_pick(ids: list[str], order: list[str], n: int) -> list[str]:
+    """Front and back halves of the material take turns, since feelings were missing from the front (§9.9)."""
+    pos = {i: k for k, i in enumerate(order)}
+    ranked = sorted(ids, key=lambda i: pos.get(i, len(order)))
+    mid = len(order) / 2
+    halves = [[i for i in ranked if pos.get(i, len(order)) < mid], [i for i in ranked if pos.get(i, len(order)) >= mid]]
+    picks: list[str] = []
+    k = 0
+    while len(picks) < n and (halves[0] or halves[1]):
+        side = halves[k % 2] or halves[(k + 1) % 2]
+        picks.append(side.pop(0))
+        k += 1
+    return picks
+
+
+def propose_followups(d: Design, p: Project, units: list[Unit], provider: Provider) -> tuple[Design, int]:
+    pending = [(x, u) for x, u in noted(d, units) if x.followup_state is None]
+    used = sum(x.followup_state in ("asked", "answered", "skipped") for x in d.units)
+    room = d.followup_limit - used
+    if not pending or room <= 0:
+        return d, 0
+    judged = parse_followups(ask_json(provider, followup_prompt(p, pending), followup_schema()), {x.id for x, _ in pending})
+    picks = set(spread_pick([i for i, q in judged.items() if q], [x.id for x in d.units], room))
+    out = []
+    for x in d.units:
+        if x.id in picks:
+            x = x.model_copy(update={"followup": judged[x.id], "followup_state": "asked"})
+        elif x.id in judged and not judged[x.id]:
+            x = x.model_copy(update={"followup": "", "followup_state": "none"})
+        out.append(x)
+    return d.model_copy(update={"units": out}), 1
+
+
+def with_answer(note: str, answer: str) -> str:
+    note, answer = note.strip(), answer.strip()
+    return f"{note}{answer}" if note.endswith(("。", "！", "？", "!", "?", "～", "…")) else f"{note}。{answer}"
 

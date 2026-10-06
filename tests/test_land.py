@@ -31,6 +31,8 @@ from kumimasu.land import (
     note_items,
     note_question,
     note_units,
+    spread_pick,
+    with_answer,
 )
 from kumimasu.llm import FakeProvider
 from kumimasu.mark import mark
@@ -244,4 +246,79 @@ def test_draft_and_check_after_cleanup(wd):
     ids = {c.id for c in check(wd, p, None, "draft.md", VOTES).checks}
     assert "land_bare" not in ids and "note_hold" not in ids
     assert not any("（判定" not in x["prompt"] and "# 結果だけの材料" in x["prompt"] for x in p.calls)
+
+
+def test_spread_pick_takes_front_and_back_in_turn():
+    order = [f"m{i}" for i in range(1, 11)]
+    assert spread_pick(["m2", "m3", "m8", "m9"], order, 2) == ["m2", "m8"]
+    assert spread_pick(["m2", "m3"], order, 2) == ["m2", "m3"]
+    assert spread_pick(["m9"], order, 2) == ["m9"]
+    assert with_answer("ハックっぽい工作で面白い", "既存製品の口を見つける") == "ハックっぽい工作で面白い。既存製品の口を見つける"
+    assert with_answer("ちゃんとしてくれ～", "落ちすぎ") == "ちゃんとしてくれ～落ちすぎ"
+
+
+def _followup_design(wd):
+    deep = [u.id for u in wd.design().units if u.use in ("deep", "mention")]
+    front, back = deep[0], deep[-1]
+    notes = {front: "工作で面白い", "m4": "ちゃんとしてくれ～", back: "地味に面白い", "q1": "これも面白い"}
+    ops.update_design(wd, {"notes": notes}, "agent-chat")
+    return front, back
+
+
+def test_followup_asks_thin_one_words_up_to_the_limit(wd):
+    front, back = _followup_design(wd)
+    p = scripted()
+    d = ops.followup(wd, p, "agent")
+    calls = [c for c in p.calls if "付けた一言です" in c["prompt"]]
+    assert len(calls) == 1 and "[m4] 材料:" in calls[0]["prompt"]
+    by = {u.id: u for u in d.units}
+    asked = [u.id for u in d.units if u.followup_state == "asked"]
+    assert len(asked) == 2 and front in asked and (back in asked or "q1" in asked)
+    assert by["m4"].followup_state == "none" and by["m4"].followup == ""
+    assert all(by[i].followup.endswith("どのへんが？") and "[" not in by[i].followup for i in asked)
+    assert ops.followup(wd, p, "agent") and len([c for c in p.calls if "付けた一言です" in c["prompt"]]) == 1
+    text = show_text(snapshot(wd))
+    assert "聞き返し（答え待ち）:" in text and "set DIR followup ID" in text
+    run_cli("set", wd.root, "followup", asked[0], "既存製品の小さな口を見つけるところ")
+    run_cli("set", wd.root, "followup", asked[1], "")
+    by = {u.id: u for u in wd.design().units}
+    assert by[asked[0]].note.endswith("。既存製品の小さな口を見つけるところ") and by[asked[0]].followup_state == "answered"
+    assert by[asked[1]].followup_state == "skipped" and by[asked[1]].note in ("地味に面白い", "これも面白い")
+    assert "聞き返し（答えた）" in show_text(snapshot(wd)) and "聞き返し（飛ばした）" in show_text(snapshot(wd))
+    prompt = draft_prompt(wd.project(), wd.design(), wd.units())
+    assert "既存製品の小さな口を見つけるところ" in _section(prompt, "掘り下げる材料") + _section(prompt, "触れる材料")
+    with pytest.raises(ValueError, match="聞き返していない"):
+        ops.update_design(wd, {"followups": {asked[0]: "もう一度"}}, "agent-chat")
+    assert ops.followup(wd, p, "agent") and len([c for c in p.calls if "付けた一言です" in c["prompt"]]) == 1
+
+
+def test_rewriting_a_one_word_clears_its_followup(wd):
+    front, _ = _followup_design(wd)
+    ops.followup(wd, scripted(), "agent")
+    assert next(u for u in wd.design().units if u.id == front).followup_state == "asked"
+    ops.update_design(wd, {"notes": {front: "工作で面白い。口を見つけるのが好き"}}, "agent-chat")
+    u = next(u for u in wd.design().units if u.id == front)
+    assert (u.followup, u.followup_state) == ("", None)
+    run_cli("set", wd.root, "followup-limit", "0")
+    p = scripted()
+    ops.followup(wd, p, "agent")
+    assert not p.calls
+
+
+def test_followup_page_and_stage(tmp_path, wd):
+    _followup_design(wd)
+    p = scripted()
+    with serving(wd, judge=lambda: p) as c:
+        status, state = c.post("/api/followup")
+        assert status == 200
+        asked = [u for u in state["design"]["units"] if u["followup_state"] == "asked"]
+        assert len(asked) == 2
+        status, _ = c.put("/api/design", {"followups": {asked[0]["id"]: "口を見つけるところ"}})
+        assert status == 200
+    assert next(u for u in wd.design().units if u.id == asked[0]["id"]).followup_state == "answered"
+    with serving(wd) as c:
+        assert c.post("/api/followup")[0] == 409
+    ops.confirm(wd, "human-ui")
+    with pytest.raises(ops.StageError):
+        ops.followup(wd, p, "agent")
 

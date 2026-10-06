@@ -54,9 +54,11 @@ LABELS = {"searchable": SEARCHABLE_LABEL, "use": USE_LABEL, "decision": DECISION
 
 
 class WriteApp:
-    def __init__(self, wd: WorkDir, rewriter: Callable[[], Provider] | None, poll_seconds: float) -> None:
+    def __init__(self, wd: WorkDir, rewriter: Callable[[], Provider] | None, poll_seconds: float,
+                 judge: Callable[[], Provider] | None = None) -> None:
         self.wd = wd
         self.rewriter = rewriter
+        self.judge = judge
         self.poll_seconds = poll_seconds
 
     def drafts(self) -> dict:
@@ -154,6 +156,12 @@ class WriteApp:
         ops.save_answers(self.wd, answers, SOURCE)
         return self.state()
 
+    def followup(self, body: dict) -> dict:
+        if self.judge is None:
+            raise StepError("聞き返しの判定役が設定されていません")
+        ops.followup(self.wd, self.judge(), SOURCE)
+        return self.state()
+
     def save_design(self, body: dict) -> dict:
         ops.update_design(self.wd, body, SOURCE)
         return self.state()
@@ -178,6 +186,7 @@ def make_handler(app: WriteApp, token: str) -> type[BaseHTTPRequestHandler]:
              ("GET", "/api/state"): lambda body: app.state(),
              ("POST", "/api/confirm"): app.confirm,
              ("POST", "/api/restart"): app.restart,
+             ("POST", "/api/followup"): app.followup,
              ("PUT", "/api/interview"): app.save_answers,
              ("PUT", "/api/design"): app.save_design}
     named = {("GET", "review"): lambda name, body: app.review(name),

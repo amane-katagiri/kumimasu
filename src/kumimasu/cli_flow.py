@@ -94,6 +94,14 @@ def _design_body(wd, what: str, a: list[str], use: str | None, label: str, where
             if len(a) != 2:
                 raise ValueError("使い方: set DIR land ID bare|author")
             return {"land": {a[0]: a[1]}}
+        case "followup":
+            if len(a) != 2:
+                raise ValueError("使い方: set DIR followup ID TEXT（空の TEXT で飛ばす）")
+            return {"followups": {a[0]: a[1]}}
+        case "followup-limit":
+            if len(a) != 1 or not a[0].isdigit():
+                raise ValueError("使い方: set DIR followup-limit N")
+            return {"followup_limit": int(a[0])}
         case "note-limit":
             if len(a) != 1 or not a[0].isdigit():
                 raise ValueError("使い方: set DIR note-limit N")
@@ -112,7 +120,7 @@ def _design_body(wd, what: str, a: list[str], use: str | None, label: str, where
 
 @app.command("set")
 def set_(path: DirArg,
-         what: Annotated[str, typer.Argument(help="unit | takeaway | purpose | order | length | skip | aside | land | note | note-limit | avoid | "
+         what: Annotated[str, typer.Argument(help="unit | takeaway | purpose | order | length | skip | aside | land | note | note-limit | followup | followup-limit | avoid | "
                                                   "research | forms | explain")],
          args: Annotated[list[str] | None, typer.Argument(help="See the examples below")] = None,
          use: Annotated[str | None, typer.Option("--use", help="deep | mention | drop (for `unit`)")] = None,
@@ -131,6 +139,8 @@ def set_(path: DirArg,
     set DIR note m38 "結局アプリ側で直した、ちょっと悔しい"   (one word: the unit becomes author; "" clears it, bare)
     set DIR land m40 bare|author   (bare: state the result, add no meaning)
     set DIR note-limit 6   (how many one words the author may give; default 5)
+    set DIR followup m16 "どのへんが…"   (answer a follow-up question; appended to the one word; "" skips it)
+    set DIR followup-limit 2   (how many follow-up questions `kumimasu followup` may ask; default 2)
     set DIR avoid add "FAQ"  |  set DIR avoid rm 1
     set DIR research add "exiftool の -d の書式"  |  set DIR research rm 1   (sent to the web researcher)
     set DIR forms "比較は表"   (the form preferences shown to the designer and the writer)
